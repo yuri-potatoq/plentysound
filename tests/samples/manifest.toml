@@ -1,0 +1,7 @@
+[[samples]]
+file = "ola_01.wav"
+keywords = ["ola", "olá"]
+
+[[samples]]
+file = "lucas_01.wav"
+keywords = ["lucas"]
