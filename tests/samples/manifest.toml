@@ -1,7 +1,12 @@
 [[samples]]
-file = "ola_01.wav"
-keywords = ["ola", "olá"]
+file = "greeting_01_pt-br.wav"
+keywords = [
+  { word = "ola", expected = 1 },
+  { word = "bom dia", expected = 1 },
+]
 
 [[samples]]
-file = "lucas_01.wav"
-keywords = ["lucas"]
+file = "greeting_02_pt-br.wav"
+keywords = [
+  { word = "ola", expected = 3 },
+]
