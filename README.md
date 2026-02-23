@@ -116,6 +116,9 @@ The **TUI client** connects to the daemon and provides the interactive terminal 
 
 ## TUI navigation
 
+### Demo!
+![demo](demo.gif)
+
 ### Panel navigation
 
 | Key | Action |
