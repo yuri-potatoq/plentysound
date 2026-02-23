@@ -22,6 +22,10 @@ When you enable the word detector from the TUI, plentysound:
 
 On subsequent launches, if word mappings exist and the model is already downloaded, the detector auto-starts when PipeWire devices become available.
 
+### Vosk model mirror
+
+The Vosk speech models used by plentysound are hosted in a separate repository: [plentysound-vosk-models](https://github.com/yuri-potatoq/plentysound-vosk-models). This repo acts as a mirror for the pre-trained Vosk models that plentysound needs for keyword detection. The mirror exists because the upstream Vosk model downloads are hosted on external servers that may be slow, unavailable, or change URLs over time. By keeping a copy in a GitHub release asset, plentysound can reliably download the correct model version without depending on third-party hosting. The daemon fetches the latest release from this repo via the GitHub API at first launch when the `transcriber` feature is enabled and no local model is found.
+
 NOTE: When keyword detection is enabled, since it use a local lightweight AI model, the program can have its memory usage increased to use around of ~100MB.
 
 ## Files created on host
