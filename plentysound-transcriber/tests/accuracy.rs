@@ -1,4 +1,4 @@
-use plentysound::audio::*;
+use plentysound_transcriber::audio::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;

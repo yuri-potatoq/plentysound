@@ -71,6 +71,7 @@
             buildInputs = [
               libvosk
               pkgs.pipewire
+              pkgs.dbus
             ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
               pkgs.libiconv
               pkgs.darwin.apple_sdk.frameworks.Security
@@ -94,6 +95,7 @@
             openssl
             libvosk
             pipewire
+            dbus
             llvmPackages.libclang
             
             # Dev utilities
