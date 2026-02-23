@@ -113,7 +113,7 @@ fn pw_thread_main(cmd_rx: Receiver<PwCommand>, evt_tx: Sender<PwEvent>) -> Resul
                     let media_class = props.get("media.class").unwrap_or("");
                     let kind = match media_class {
                         "Audio/Sink" => Some(DeviceKind::Output),
-                        "Stream/Input/Audio" => Some(DeviceKind::Input),
+                        "Audio/Source" | "Stream/Input/Audio" => Some(DeviceKind::Input),
                         _ => None,
                     };
                     if let Some(kind) = kind {
@@ -122,8 +122,16 @@ fn pw_thread_main(cmd_rx: Receiver<PwCommand>, evt_tx: Sender<PwEvent>) -> Resul
                         let client_id: Option<u32> = props
                             .get("client.id")
                             .and_then(|s| s.parse().ok());
+                        let is_hw_source = media_class == "Audio/Source";
                         let description = match kind {
+                            DeviceKind::Input if is_hw_source => {
+                                // Hardware audio source (microphone) — use node.description
+                                props.get("node.description")
+                                    .unwrap_or(&name)
+                                    .to_string()
+                            }
                             DeviceKind::Input => {
+                                // Application capture stream — resolve client binary
                                 if let Some(cid) = client_id {
                                     client_ids_clone.lock().unwrap().insert(cid);
                                 }

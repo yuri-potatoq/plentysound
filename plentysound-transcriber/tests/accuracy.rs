@@ -1,10 +1,14 @@
-use plentysound_transcriber::audio::*;
+use plentysound_transcriber::audio::{
+    self, check_keywords_exact, check_keywords_matched, highpass_filter, normalize,
+    CHUNK_SAMPLES, MIN_TAIL_SAMPLES, OVERLAP_SAMPLES, SAMPLE_RATE,
+};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Instant;
 use vosk::{Model, Recognizer};
+
 
 // ── Manifest types ───────────────────────────────────────────────────────────
 
@@ -97,8 +101,15 @@ fn accuracy_benchmark() {
         return;
     }
 
-    // Load Vosk model
-    let model = Model::new(MODEL_PATH).expect("Failed to load Vosk model");
+    // Load Vosk model from VOSK_MODEL_PATH env var
+    let model_path = match std::env::var("VOSK_MODEL_PATH") {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("⚠  Skipping accuracy benchmark: VOSK_MODEL_PATH not set");
+            return;
+        }
+    };
+    let model = Model::new(&model_path).expect("Failed to load Vosk model");
 
     let mut results: Vec<KeywordResult> = Vec::new();
     let mut sample_timings: Vec<(String, std::time::Duration)> = Vec::new();
@@ -235,8 +246,8 @@ fn chunk_audio(pcm: &[i16]) -> Vec<Vec<i16>> {
         offset += advance;
     }
 
-    // Include trailing partial chunk if any samples remain
-    if offset < pcm.len() {
+    // Include trailing partial chunk if enough samples remain to be useful
+    if offset < pcm.len() && (pcm.len() - offset) >= MIN_TAIL_SAMPLES {
         let mut tail = pcm[offset..].to_vec();
         // Pad with silence to fill a full chunk
         tail.resize(CHUNK_SAMPLES, 0);

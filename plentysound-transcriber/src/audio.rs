@@ -5,17 +5,17 @@ use strsim::jaro_winkler;
 
 pub const SAMPLE_RATE: f64 = 16_000.0;
 pub const CHANNELS: u32 = 1;
-pub const KEYWORDS: &[&str] = &["olá", "ola", "oi", "lucas"];
 
 pub const CHUNK_SECS: f64 = 1.5;
-pub const OVERLAP_SECS: f64 = 0.5;
+pub const OVERLAP_SECS: f64 = 0.75;
 pub const CHUNK_SAMPLES: usize = (SAMPLE_RATE * CHUNK_SECS) as usize; // 24000
-pub const OVERLAP_SAMPLES: usize = (SAMPLE_RATE * OVERLAP_SECS) as usize; // 8000
+pub const OVERLAP_SAMPLES: usize = (SAMPLE_RATE * OVERLAP_SECS) as usize; // 12000
+
+/// Minimum number of samples in a tail chunk worth sending to the recognizer.
+/// Below this (~200ms) there's too little speech to recognize.
+pub const MIN_TAIL_SAMPLES: usize = (SAMPLE_RATE * 0.2) as usize; // 3200
 
 pub const FUZZY_THRESHOLD: f64 = 0.85; // Jaro-Winkler similarity threshold
-
-// Path to your downloaded Vosk model directory
-pub const MODEL_PATH: &str = "/home/potatoq/Downloads/vosk-model-small-pt-0.3";
 
 // ── Audio preprocessing ──────────────────────────────────────────────────────
 

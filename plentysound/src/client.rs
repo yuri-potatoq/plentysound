@@ -15,13 +15,22 @@ use std::io;
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
+#[cfg(feature = "transcriber")]
+use crate::textinput::TextInput;
+#[cfg(feature = "transcriber")]
+use crate::protocol::WordDetectorStatus;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
     Sinks,
     Volume,
     AudioFx,
     AddButton,
+    #[cfg(feature = "transcriber")]
+    WordDetectorButton,
     Songs,
+    #[cfg(feature = "transcriber")]
+    WordBindings,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -30,7 +39,19 @@ pub struct AppLayout {
     pub volume_area: Rect,
     pub audio_fx_area: Rect,
     pub add_button_area: Rect,
+    #[cfg(feature = "transcriber")]
+    pub word_detector_button_area: Rect,
     pub songs_area: Rect,
+    #[cfg(feature = "transcriber")]
+    pub word_bindings_area: Rect,
+}
+
+#[cfg(feature = "transcriber")]
+pub enum TranscriberOverlay {
+    SelectSource { selected: usize },
+    SelectOutput { selected: usize },
+    EnterWord { input: TextInput },
+    PickSong { word: String, selected: usize },
 }
 
 pub struct ClientApp {
@@ -38,6 +59,16 @@ pub struct ClientApp {
     pub focus: Panel,
     pub selected_fx: usize,
     pub file_browser: Option<FileBrowser>,
+    #[cfg(feature = "transcriber")]
+    pub transcriber_overlay: Option<TranscriberOverlay>,
+    #[cfg(feature = "transcriber")]
+    pub detector_source_node: Option<u32>,
+    #[cfg(feature = "transcriber")]
+    pub detector_source_description: Option<String>,
+    #[cfg(feature = "transcriber")]
+    pub detector_output_description: Option<String>,
+    #[cfg(feature = "transcriber")]
+    pub selected_word_binding: usize,
     pub layout: AppLayout,
     pub should_quit: bool,
     pub status_message: Option<String>,
@@ -60,6 +91,16 @@ impl ClientApp {
             focus: Panel::Sinks,
             selected_fx: 0,
             file_browser: None,
+            #[cfg(feature = "transcriber")]
+            transcriber_overlay: None,
+            #[cfg(feature = "transcriber")]
+            detector_source_node: None,
+            #[cfg(feature = "transcriber")]
+            detector_source_description: None,
+            #[cfg(feature = "transcriber")]
+            detector_output_description: None,
+            #[cfg(feature = "transcriber")]
+            selected_word_binding: 0,
             layout: AppLayout::default(),
             should_quit: false,
             status_message: None,
@@ -80,6 +121,16 @@ impl ClientApp {
             match recv_message::<DaemonEvent>(&mut self.stream) {
                 Ok(event) => match event {
                     DaemonEvent::State(s) => {
+                        #[cfg(feature = "transcriber")]
+                        {
+                            crate::log::log_info(&format!(
+                                "Client received State: detector_status={:?}",
+                                s.word_detector_status
+                            ));
+                            if let WordDetectorStatus::DownloadFailed(ref msg) = s.word_detector_status {
+                                self.status_message = Some(format!("Model download failed: {}", msg));
+                            }
+                        }
                         self.state = s;
                     }
                     DaemonEvent::SinksUpdated(sinks) => {
@@ -100,6 +151,10 @@ impl ClientApp {
                         self.should_quit = true;
                         return;
                     }
+                    #[cfg(feature = "transcriber")]
+                    DaemonEvent::WordDetected(word) => {
+                        self.status_message = Some(format!("Word detected: \"{}\"", word));
+                    }
                 },
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(_) => {
@@ -113,6 +168,11 @@ impl ClientApp {
     pub fn handle_event(&mut self, ev: Event) {
         match ev {
             Event::Key(key) => {
+                #[cfg(feature = "transcriber")]
+                if self.transcriber_overlay.is_some() {
+                    self.handle_overlay_key(key);
+                    return;
+                }
                 if self.file_browser.is_some() {
                     self.handle_filebrowser_key(key);
                 } else {
@@ -120,6 +180,10 @@ impl ClientApp {
                 }
             }
             Event::Mouse(mouse) => {
+                #[cfg(feature = "transcriber")]
+                if self.transcriber_overlay.is_some() {
+                    return;
+                }
                 if self.file_browser.is_none() {
                     self.handle_mouse(mouse);
                 }
@@ -139,7 +203,7 @@ impl ClientApp {
             KeyCode::Up => self.move_up(),
             KeyCode::Down => self.move_down(),
             KeyCode::Enter => self.activate(),
-            KeyCode::Char('d') | KeyCode::Delete => self.delete_selected_song(),
+            KeyCode::Char('d') | KeyCode::Delete => self.delete_selected(),
             KeyCode::Char('r') => {
                 self.send_command(ClientCommand::RefreshSinks);
             }
@@ -175,6 +239,165 @@ impl ClientApp {
                 }
             }
             _ => {}
+        }
+    }
+
+    #[cfg(feature = "transcriber")]
+    fn handle_overlay_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.transcriber_overlay = None;
+            }
+            _ => {
+                let overlay = self.transcriber_overlay.take();
+                match overlay {
+                    Some(TranscriberOverlay::SelectSource { mut selected }) => {
+                        let input_sinks: Vec<_> = self
+                            .state
+                            .sinks
+                            .iter()
+                            .filter(|s| s.kind == "Input")
+                            .collect();
+                        match key.code {
+                            KeyCode::Up => {
+                                if selected > 0 {
+                                    selected -= 1;
+                                }
+                            }
+                            KeyCode::Down => {
+                                if !input_sinks.is_empty()
+                                    && selected < input_sinks.len() - 1
+                                {
+                                    selected += 1;
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if let Some(sink) = input_sinks.get(selected) {
+                                    self.detector_source_node = Some(sink.id);
+                                    self.detector_source_description = Some(sink.description.clone());
+                                    self.transcriber_overlay =
+                                        Some(TranscriberOverlay::SelectOutput {
+                                            selected: 0,
+                                        });
+                                    return;
+                                }
+                            }
+                            _ => {}
+                        }
+                        self.transcriber_overlay =
+                            Some(TranscriberOverlay::SelectSource { selected });
+                    }
+                    Some(TranscriberOverlay::SelectOutput { mut selected }) => {
+                        let output_sinks: Vec<_> = self
+                            .state
+                            .sinks
+                            .iter()
+                            .filter(|s| s.kind == "Output")
+                            .collect();
+                        match key.code {
+                            KeyCode::Up => {
+                                if selected > 0 {
+                                    selected -= 1;
+                                }
+                            }
+                            KeyCode::Down => {
+                                if !output_sinks.is_empty()
+                                    && selected < output_sinks.len() - 1
+                                {
+                                    selected += 1;
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if let Some(sink) = output_sinks.get(selected) {
+                                    self.detector_output_description = Some(sink.description.clone());
+                                    // Select this output sink in the main app
+                                    if let Some(idx) = self.state.sinks.iter().position(|s| s.id == sink.id) {
+                                        self.send_command(ClientCommand::SelectSink(idx));
+                                    }
+                                    self.transcriber_overlay =
+                                        Some(TranscriberOverlay::EnterWord {
+                                            input: TextInput::new(),
+                                        });
+                                    return;
+                                }
+                            }
+                            _ => {}
+                        }
+                        self.transcriber_overlay =
+                            Some(TranscriberOverlay::SelectOutput { selected });
+                    }
+                    Some(TranscriberOverlay::EnterWord { mut input }) => {
+                        match key.code {
+                            KeyCode::Enter => {
+                                if !input.is_empty() {
+                                    let word = input.as_str().to_string();
+                                    self.transcriber_overlay =
+                                        Some(TranscriberOverlay::PickSong {
+                                            word,
+                                            selected: 0,
+                                        });
+                                    return;
+                                }
+                            }
+                            KeyCode::Backspace => {
+                                input.backspace();
+                            }
+                            KeyCode::Char(c) => {
+                                input.push_char(c);
+                            }
+                            _ => {}
+                        }
+                        self.transcriber_overlay =
+                            Some(TranscriberOverlay::EnterWord { input });
+                    }
+                    Some(TranscriberOverlay::PickSong {
+                        word,
+                        mut selected,
+                    }) => {
+                        match key.code {
+                            KeyCode::Up => {
+                                if selected > 0 {
+                                    selected -= 1;
+                                }
+                            }
+                            KeyCode::Down => {
+                                if !self.state.songs.is_empty()
+                                    && selected < self.state.songs.len() - 1
+                                {
+                                    selected += 1;
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if selected < self.state.songs.len() {
+                                    self.send_command(ClientCommand::AddWordMapping {
+                                        word: word.clone(),
+                                        song_index: selected,
+                                        source_description: self.detector_source_description.clone().unwrap_or_default(),
+                                        output_description: self.detector_output_description.clone().unwrap_or_default(),
+                                    });
+                                    // Start the detector with the selected source
+                                    if let Some(node_id) = self.detector_source_node {
+                                        self.send_command(
+                                            ClientCommand::StartWordDetector(node_id),
+                                        );
+                                    }
+                                    self.transcriber_overlay = None;
+                                    self.status_message = Some(format!(
+                                        "Mapped \"{}\" -> {}",
+                                        word,
+                                        self.state.songs[selected].name
+                                    ));
+                                    return;
+                                }
+                            }
+                            _ => {}
+                        }
+                        self.transcriber_overlay =
+                            Some(TranscriberOverlay::PickSong { word, selected });
+                    }
+                    None => {}
+                }
+            }
         }
     }
 
@@ -229,15 +452,31 @@ impl ClientApp {
         } else if self.layout.add_button_area.contains((col, row).into()) {
             self.focus = Panel::AddButton;
             self.activate();
-        } else if self.layout.songs_area.contains((col, row).into()) {
+        }
+        #[cfg(feature = "transcriber")]
+        if self.layout.word_detector_button_area.contains((col, row).into()) {
+            self.focus = Panel::WordDetectorButton;
+            self.activate();
+            return;
+        }
+        #[cfg(feature = "transcriber")]
+        if self.layout.word_bindings_area.contains((col, row).into()) {
+            self.focus = Panel::WordBindings;
+            let inner_y = row.saturating_sub(self.layout.word_bindings_area.y + 1);
+            let bindings = self.bindings_for_selected_song();
+            if !bindings.is_empty() {
+                self.selected_word_binding = (inner_y as usize).min(bindings.len() - 1);
+            }
+            return;
+        }
+        if self.layout.songs_area.contains((col, row).into()) {
             self.focus = Panel::Songs;
             let inner_y = row.saturating_sub(self.layout.songs_area.y + 1);
             let idx = inner_y as usize;
-            if !self.state.songs.is_empty() {
-                let idx = idx.min(self.state.songs.len() - 1);
+            if !self.state.songs.is_empty() && idx < self.state.songs.len() {
                 self.send_command(ClientCommand::SelectSong(idx));
+                self.send_command(ClientCommand::Play);
             }
-            self.activate();
         }
     }
 
@@ -246,19 +485,62 @@ impl ClientApp {
             Panel::Sinks => Panel::Volume,
             Panel::Volume => Panel::AudioFx,
             Panel::AudioFx => Panel::AddButton,
+            #[cfg(feature = "transcriber")]
+            Panel::AddButton => Panel::WordDetectorButton,
+            #[cfg(feature = "transcriber")]
+            Panel::WordDetectorButton => Panel::Songs,
+            #[cfg(not(feature = "transcriber"))]
             Panel::AddButton => Panel::Songs,
+            #[cfg(feature = "transcriber")]
+            Panel::Songs => {
+                if self.show_word_bindings_panel() {
+                    Panel::WordBindings
+                } else {
+                    Panel::Sinks
+                }
+            }
+            #[cfg(not(feature = "transcriber"))]
             Panel::Songs => Panel::Sinks,
+            #[cfg(feature = "transcriber")]
+            Panel::WordBindings => Panel::Sinks,
         };
     }
 
     fn cycle_focus_back(&mut self) {
         self.focus = match self.focus {
+            #[cfg(feature = "transcriber")]
+            Panel::Sinks => {
+                if self.show_word_bindings_panel() {
+                    Panel::WordBindings
+                } else {
+                    Panel::Songs
+                }
+            }
+            #[cfg(not(feature = "transcriber"))]
             Panel::Sinks => Panel::Songs,
             Panel::Volume => Panel::Sinks,
             Panel::AudioFx => Panel::Volume,
+            #[cfg(feature = "transcriber")]
             Panel::AddButton => Panel::AudioFx,
+            #[cfg(feature = "transcriber")]
+            Panel::WordDetectorButton => Panel::AddButton,
+            #[cfg(feature = "transcriber")]
+            Panel::Songs => Panel::WordDetectorButton,
+            #[cfg(not(feature = "transcriber"))]
+            Panel::AddButton => Panel::AudioFx,
+            #[cfg(not(feature = "transcriber"))]
             Panel::Songs => Panel::AddButton,
+            #[cfg(feature = "transcriber")]
+            Panel::WordBindings => Panel::Songs,
         };
+    }
+
+    #[cfg(feature = "transcriber")]
+    fn show_word_bindings_panel(&self) -> bool {
+        matches!(
+            self.state.word_detector_status,
+            WordDetectorStatus::Ready | WordDetectorStatus::Running
+        )
     }
 
     fn handle_left(&mut self) {
@@ -280,7 +562,7 @@ impl ClientApp {
                 }
                 _ => {}
             },
-            _ => {}
+            _ => self.cycle_focus_back(),
         }
     }
 
@@ -303,7 +585,7 @@ impl ClientApp {
                 }
                 _ => {}
             },
-            _ => {}
+            _ => self.cycle_focus(),
         }
     }
 
@@ -319,6 +601,10 @@ impl ClientApp {
                 if self.state.selected_song > 0 {
                     self.state.selected_song -= 1;
                     self.send_command(ClientCommand::SelectSong(self.state.selected_song));
+                    #[cfg(feature = "transcriber")]
+                    {
+                        self.selected_word_binding = 0;
+                    }
                 }
             }
             Panel::AudioFx => {
@@ -326,7 +612,13 @@ impl ClientApp {
                     self.selected_fx -= 1;
                 }
             }
-            Panel::AddButton | Panel::Volume => {}
+            #[cfg(feature = "transcriber")]
+            Panel::WordBindings => {
+                if self.selected_word_binding > 0 {
+                    self.selected_word_binding -= 1;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -346,6 +638,10 @@ impl ClientApp {
                 {
                     self.state.selected_song += 1;
                     self.send_command(ClientCommand::SelectSong(self.state.selected_song));
+                    #[cfg(feature = "transcriber")]
+                    {
+                        self.selected_word_binding = 0;
+                    }
                 }
             }
             Panel::AudioFx => {
@@ -353,7 +649,14 @@ impl ClientApp {
                     self.selected_fx += 1;
                 }
             }
-            Panel::AddButton | Panel::Volume => {}
+            #[cfg(feature = "transcriber")]
+            Panel::WordBindings => {
+                let count = self.bindings_for_selected_song().len();
+                if count > 0 && self.selected_word_binding < count - 1 {
+                    self.selected_word_binding += 1;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -365,14 +668,74 @@ impl ClientApp {
             Panel::Songs => {
                 self.send_command(ClientCommand::Play);
             }
-            Panel::Sinks | Panel::Volume | Panel::AudioFx => {}
+            #[cfg(feature = "transcriber")]
+            Panel::WordDetectorButton => {
+                self.activate_word_detector();
+            }
+            _ => {}
         }
     }
 
-    fn delete_selected_song(&mut self) {
-        if self.focus == Panel::Songs && !self.state.songs.is_empty() {
-            self.send_command(ClientCommand::RemoveSong(self.state.selected_song));
+    #[cfg(feature = "transcriber")]
+    fn activate_word_detector(&mut self) {
+        match &self.state.word_detector_status {
+            WordDetectorStatus::Unavailable | WordDetectorStatus::DownloadFailed(_) => {
+                self.send_command(ClientCommand::StartModelDownload);
+                self.status_message = Some("Starting model download...".to_string());
+            }
+            WordDetectorStatus::Downloading => {
+                self.status_message = Some("Model download in progress...".to_string());
+            }
+            WordDetectorStatus::Ready => {
+                // Open source selection overlay
+                self.transcriber_overlay =
+                    Some(TranscriberOverlay::SelectSource { selected: 0 });
+            }
+            WordDetectorStatus::Running => {
+                // Open overlay to add more mappings or stop
+                self.transcriber_overlay =
+                    Some(TranscriberOverlay::SelectSource { selected: 0 });
+            }
         }
+    }
+
+    fn delete_selected(&mut self) {
+        match self.focus {
+            Panel::Songs => {
+                if !self.state.songs.is_empty() {
+                    self.send_command(ClientCommand::RemoveSong(self.state.selected_song));
+                }
+            }
+            #[cfg(feature = "transcriber")]
+            Panel::WordBindings => {
+                let bindings = self.bindings_for_selected_song();
+                let count = bindings.len();
+                if let Some(&(global_idx, _)) = bindings.get(self.selected_word_binding) {
+                    drop(bindings);
+                    self.send_command(ClientCommand::RemoveWordMapping(global_idx));
+                    if self.selected_word_binding > 0
+                        && self.selected_word_binding >= count - 1
+                    {
+                        self.selected_word_binding -= 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[cfg(feature = "transcriber")]
+    pub fn bindings_for_selected_song(&self) -> Vec<(usize, &crate::protocol::WordMapping)> {
+        if self.state.songs.is_empty() {
+            return Vec::new();
+        }
+        let selected_path = &self.state.songs[self.state.selected_song].path;
+        self.state
+            .word_mappings
+            .iter()
+            .enumerate()
+            .filter(|(_, wm)| wm.song_path == *selected_path)
+            .collect()
     }
 
     // Accessors for UI compatibility
@@ -409,11 +772,16 @@ fn connect_to_daemon() -> Result<UnixStream> {
 
 fn spawn_daemon() -> Result<()> {
     let exe = std::env::current_exe().context("Cannot determine own executable path")?;
+    let log_file = crate::log::open_log_file();
+    let stderr_cfg = match log_file {
+        Some(f) => std::process::Stdio::from(f),
+        None => std::process::Stdio::null(),
+    };
     std::process::Command::new(exe)
         .arg("daemon")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(stderr_cfg)
         .spawn()
         .context("Failed to spawn daemon process")?;
     Ok(())
@@ -499,6 +867,11 @@ fn run_tui(app: &mut ClientApp) -> Result<()> {
 pub fn send_stop() -> Result<()> {
     let mut stream = connect_to_daemon().context("No daemon is running")?;
     stream.set_nonblocking(false)?;
+    // Must read the initial State the daemon sends on connect,
+    // otherwise the daemon's handle_new_client bails before spawning
+    // the reader thread and our Quit command is never processed.
+    let _initial: DaemonEvent = recv_message(&mut stream)
+        .context("Failed to receive initial state from daemon")?;
     send_message(&mut stream, &ClientCommand::Quit)?;
     println!("Sent stop signal to daemon.");
     Ok(())

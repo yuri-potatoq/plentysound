@@ -7,6 +7,11 @@ use ratatui::{
     Frame,
 };
 
+#[cfg(feature = "transcriber")]
+use crate::client::TranscriberOverlay;
+#[cfg(feature = "transcriber")]
+use crate::protocol::WordDetectorStatus;
+
 pub fn draw(f: &mut Frame, app: &mut ClientApp) {
     let size = f.area();
 
@@ -37,6 +42,7 @@ pub fn draw(f: &mut Frame, app: &mut ClientApp) {
     draw_audio_fx_panel(f, app, left_chunks[2]);
     draw_right_panel(f, app, main_chunks[1]);
 
+    // Help text / status bar
     if let Some(msg) = &app.status_message {
         let help = Paragraph::new(Line::from(Span::styled(
             msg.as_str(),
@@ -44,11 +50,7 @@ pub fn draw(f: &mut Frame, app: &mut ClientApp) {
         )));
         f.render_widget(help, help_area);
     } else {
-        let help_text = if app.file_browser.is_some() {
-            "[Up/Down] Navigate  [Enter] Open  [Backspace] Parent dir  [Esc] Close"
-        } else {
-            "[Tab] Switch panel  [Up/Down] Navigate  [Enter] Select  [d] Delete song  [r] Refresh sinks  [q] Quit TUI"
-        };
+        let help_text = help_text_for_state(app);
         let help = Paragraph::new(Line::from(Span::styled(
             help_text,
             Style::default().fg(Color::DarkGray),
@@ -56,9 +58,43 @@ pub fn draw(f: &mut Frame, app: &mut ClientApp) {
         f.render_widget(help, help_area);
     }
 
+    // Overlays
     if let Some(fb) = &app.file_browser {
         draw_file_browser(f, fb, size);
     }
+
+    #[cfg(feature = "transcriber")]
+    if let Some(overlay) = &app.transcriber_overlay {
+        match overlay {
+            TranscriberOverlay::SelectSource { selected } => {
+                draw_source_select_overlay(f, app, size, *selected);
+            }
+            TranscriberOverlay::SelectOutput { selected } => {
+                draw_output_select_overlay(f, app, size, *selected);
+            }
+            TranscriberOverlay::EnterWord { input } => {
+                draw_word_input_overlay(f, size, input);
+            }
+            TranscriberOverlay::PickSong { word, selected } => {
+                draw_song_picker_overlay(f, app, size, word, *selected);
+            }
+        }
+    }
+}
+
+fn help_text_for_state(app: &ClientApp) -> &'static str {
+    if app.file_browser.is_some() {
+        return "[Up/Down] Navigate  [Enter] Open  [Backspace] Parent dir  [Esc] Close";
+    }
+    #[cfg(feature = "transcriber")]
+    if app.transcriber_overlay.is_some() {
+        return "[Up/Down] Navigate  [Enter] Select  [Esc] Close";
+    }
+    #[cfg(feature = "transcriber")]
+    if app.focus == Panel::WordBindings {
+        return "[Left/Right] Switch panel  [Up/Down] Navigate  [d] Delete binding  [Tab/Shift+Tab] Cycle panels";
+    }
+    "[Left/Right] Switch panel  [Up/Down] Navigate  [Enter] Select  [d] Delete song  [r] Refresh  [Tab/Shift+Tab] Cycle  [q] Quit"
 }
 
 fn draw_sinks_panel(f: &mut Frame, app: &ClientApp, area: Rect) {
@@ -288,11 +324,32 @@ fn draw_right_panel(f: &mut Frame, app: &mut ClientApp, area: Rect) {
         .constraints([Constraint::Length(3), Constraint::Min(1)])
         .split(area);
 
-    app.layout.add_button_area = chunks[0];
-    app.layout.songs_area = chunks[1];
+    let button_row = chunks[0];
+    let songs_area = chunks[1];
+    app.layout.songs_area = songs_area;
 
-    draw_add_button(f, app, chunks[0]);
-    draw_songs_panel(f, app, chunks[1]);
+    #[cfg(feature = "transcriber")]
+    {
+        // Split button row: AddButton (50%) | WordDetectorButton (50%)
+        let btn_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(button_row);
+
+        app.layout.add_button_area = btn_chunks[0];
+        app.layout.word_detector_button_area = btn_chunks[1];
+
+        draw_add_button(f, app, btn_chunks[0]);
+        draw_word_detector_button(f, app, btn_chunks[1]);
+    }
+
+    #[cfg(not(feature = "transcriber"))]
+    {
+        app.layout.add_button_area = button_row;
+        draw_add_button(f, app, button_row);
+    }
+
+    draw_songs_panel(f, app, songs_area);
 }
 
 fn draw_add_button(f: &mut Frame, app: &ClientApp, area: Rect) {
@@ -321,7 +378,62 @@ fn draw_add_button(f: &mut Frame, app: &ClientApp, area: Rect) {
     f.render_widget(paragraph, area);
 }
 
-fn draw_songs_panel(f: &mut Frame, app: &ClientApp, area: Rect) {
+#[cfg(feature = "transcriber")]
+fn draw_word_detector_button(f: &mut Frame, app: &ClientApp, area: Rect) {
+    let is_focused = app.focus == Panel::WordDetectorButton;
+    let border_style = if is_focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let (label, color) = match &app.state.word_detector_status {
+        WordDetectorStatus::Unavailable => ("Enable Word Detector", Color::White),
+        WordDetectorStatus::Downloading => ("Downloading Model...", Color::Yellow),
+        WordDetectorStatus::DownloadFailed(_) => ("Download Failed (retry)", Color::Red),
+        WordDetectorStatus::Ready => ("Word Detector", Color::White),
+        WordDetectorStatus::Running => ("Word Detector [ON]", Color::Green),
+    };
+
+    let text_style = if is_focused {
+        Style::default().fg(color).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(color)
+    };
+
+    let text = Span::styled(format!(" [ {} ] ", label), text_style);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style);
+
+    let paragraph = Paragraph::new(Line::from(text)).block(block);
+    f.render_widget(paragraph, area);
+}
+
+fn draw_songs_panel(f: &mut Frame, app: &mut ClientApp, area: Rect) {
+    #[cfg(feature = "transcriber")]
+    {
+        let show_bindings = matches!(
+            app.state.word_detector_status,
+            WordDetectorStatus::Ready | WordDetectorStatus::Running
+        );
+        if show_bindings {
+            let h_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+                .split(area);
+            app.layout.songs_area = h_chunks[0];
+            app.layout.word_bindings_area = h_chunks[1];
+            draw_song_list(f, app, h_chunks[0]);
+            draw_word_bindings_panel(f, app, h_chunks[1]);
+            return;
+        }
+    }
+    draw_song_list(f, app, area);
+}
+
+fn draw_song_list(f: &mut Frame, app: &ClientApp, area: Rect) {
     let border_style = if app.focus == Panel::Songs {
         Style::default().fg(Color::Cyan)
     } else {
@@ -366,6 +478,75 @@ fn draw_songs_panel(f: &mut Frame, app: &ClientApp, area: Rect) {
     f.render_stateful_widget(list, area, &mut state);
 }
 
+#[cfg(feature = "transcriber")]
+fn draw_word_bindings_panel(f: &mut Frame, app: &ClientApp, area: Rect) {
+    let border_style = if app.focus == Panel::WordBindings {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let block = Block::default()
+        .title(" Word Bindings ")
+        .borders(Borders::ALL)
+        .border_style(border_style);
+
+    let bindings = app.bindings_for_selected_song();
+
+    if bindings.is_empty() {
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+        if inner.width > 0 && inner.height > 0 {
+            let text = Paragraph::new(Line::from(Span::styled(
+                "No bindings",
+                Style::default().fg(Color::DarkGray),
+            )));
+            f.render_widget(text, inner);
+        }
+        return;
+    }
+
+    let is_focused = app.focus == Panel::WordBindings;
+    let items: Vec<ListItem> = bindings
+        .iter()
+        .enumerate()
+        .map(|(i, (_, wm))| {
+            let is_selected = is_focused && i == app.selected_word_binding.min(bindings.len().saturating_sub(1));
+            let word_style = if is_selected {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let detail_style = if is_selected {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            let line1 = Line::from(Span::styled(wm.word.clone(), word_style));
+            let src = if wm.source_description.is_empty() { "—" } else { &wm.source_description };
+            let out = if wm.output_description.is_empty() { "—" } else { &wm.output_description };
+            let line2 = Line::from(Span::styled(format!("├─ [In] {}", src), detail_style));
+            let line3 = Line::from(Span::styled(format!("└─ [Out] {}", out), detail_style));
+            ListItem::new(vec![line1, line2, line3])
+        })
+        .collect();
+
+    let mut state = ListState::default();
+    let selected = app.selected_word_binding.min(bindings.len().saturating_sub(1));
+    state.select(Some(selected));
+
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+
+    f.render_stateful_widget(list, area, &mut state);
+}
+
 fn draw_file_browser(f: &mut Frame, fb: &crate::filebrowser::FileBrowser, area: Rect) {
     let popup_area = centered_rect(60, 70, area);
 
@@ -393,6 +574,164 @@ fn draw_file_browser(f: &mut Frame, fb: &crate::filebrowser::FileBrowser, area: 
     let mut state = ListState::default();
     if !fb.entries.is_empty() {
         state.select(Some(fb.selected));
+    }
+
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+
+    f.render_stateful_widget(list, popup_area, &mut state);
+}
+
+#[cfg(feature = "transcriber")]
+fn draw_source_select_overlay(
+    f: &mut Frame,
+    app: &ClientApp,
+    area: Rect,
+    selected: usize,
+) {
+    let popup_area = centered_rect(50, 50, area);
+    f.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .title(" Select Audio Source ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Magenta));
+
+    let input_sinks: Vec<_> = app.sinks().iter().filter(|s| s.kind == "Input").collect();
+
+    let items: Vec<ListItem> = input_sinks
+        .iter()
+        .map(|sink| ListItem::new(format!("  {}", sink.description)))
+        .collect();
+
+    let mut state = ListState::default();
+    if !input_sinks.is_empty() {
+        state.select(Some(selected.min(input_sinks.len().saturating_sub(1))));
+    }
+
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+
+    f.render_stateful_widget(list, popup_area, &mut state);
+}
+
+#[cfg(feature = "transcriber")]
+fn draw_output_select_overlay(
+    f: &mut Frame,
+    app: &ClientApp,
+    area: Rect,
+    selected: usize,
+) {
+    let popup_area = centered_rect(50, 50, area);
+    f.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .title(" Select Audio Output ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Magenta));
+
+    let output_sinks: Vec<_> = app.sinks().iter().filter(|s| s.kind == "Output").collect();
+
+    let items: Vec<ListItem> = output_sinks
+        .iter()
+        .map(|sink| ListItem::new(format!("  {}", sink.description)))
+        .collect();
+
+    let mut state = ListState::default();
+    if !output_sinks.is_empty() {
+        state.select(Some(selected.min(output_sinks.len().saturating_sub(1))));
+    }
+
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+
+    f.render_stateful_widget(list, popup_area, &mut state);
+}
+
+#[cfg(feature = "transcriber")]
+fn draw_word_input_overlay(
+    f: &mut Frame,
+    area: Rect,
+    input: &crate::textinput::TextInput,
+) {
+    let popup_area = centered_rect(40, 20, area);
+    // Ensure minimum height of 5
+    let popup_area = Rect {
+        height: popup_area.height.max(5),
+        ..popup_area
+    };
+    f.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .title(" Enter Word to Detect ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Magenta));
+
+    let inner = block.inner(popup_area);
+    f.render_widget(block, popup_area);
+
+    if inner.width > 0 && inner.height > 0 {
+        let text = format!("> {}_", input.as_str());
+        let paragraph = Paragraph::new(Line::from(Span::styled(
+            text,
+            Style::default().fg(Color::White),
+        )));
+        f.render_widget(paragraph, Rect::new(inner.x, inner.y + 1, inner.width, 1));
+
+        let hint = Paragraph::new(Line::from(Span::styled(
+            "Type a word, then press Enter",
+            Style::default().fg(Color::DarkGray),
+        )));
+        if inner.height > 2 {
+            f.render_widget(hint, Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1));
+        }
+    }
+}
+
+#[cfg(feature = "transcriber")]
+fn draw_song_picker_overlay(
+    f: &mut Frame,
+    app: &ClientApp,
+    area: Rect,
+    word: &str,
+    selected: usize,
+) {
+    let popup_area = centered_rect(50, 50, area);
+    f.render_widget(Clear, popup_area);
+
+    let title = format!(" Pick Song for \"{}\" ", word);
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Magenta));
+
+    let items: Vec<ListItem> = app
+        .songs()
+        .iter()
+        .map(|song| ListItem::new(format!("  {}", song.name)))
+        .collect();
+
+    let mut state = ListState::default();
+    if !app.songs().is_empty() {
+        state.select(Some(selected.min(app.songs().len().saturating_sub(1))));
     }
 
     let list = List::new(items)

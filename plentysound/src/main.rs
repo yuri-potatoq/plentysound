@@ -7,6 +7,7 @@ mod filebrowser;
 mod log;
 mod pipewire;
 mod protocol;
+mod textinput;
 mod tray;
 mod ui;
 

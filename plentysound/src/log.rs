@@ -19,7 +19,20 @@ fn log_path() -> PathBuf {
     path
 }
 
+pub fn open_log_file() -> Option<std::fs::File> {
+    let path = log_path();
+    OpenOptions::new().create(true).append(true).open(&path).ok()
+}
+
+pub fn log_info(msg: &str) {
+    log_write("INFO", msg);
+}
+
 pub fn log_error(msg: &str) {
+    log_write("ERROR", msg);
+}
+
+fn log_write(level: &str, msg: &str) {
     let path = {
         let mut cached = LOG_FILE.lock().unwrap();
         if cached.is_none() {
@@ -33,6 +46,6 @@ pub fn log_error(msg: &str) {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let _ = writeln!(file, "[{timestamp}] {msg}");
+        let _ = writeln!(file, "[{timestamp}] [{level}] {msg}");
     }
 }
