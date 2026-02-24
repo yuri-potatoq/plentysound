@@ -81,14 +81,37 @@ The `transcriber` feature requires `libvosk` to be available. See the [Vosk inst
 
 ### With Nix
 
-The included `flake.nix` provides a complete build environment with all dependencies (including `libvosk`):
+The flake provides two package variants:
+
+| Package | Description |
+|---------|-------------|
+| `plentysound` (default) | Soundboard only — no libvosk dependency |
+| `plentysound-full` | Includes AI keyword detection via the `transcriber` feature |
+
+#### Local build (from a cloned repo)
 
 ```bash
-# Build
+# Soundboard only (default)
 nix build
 
-# Development shell (includes rust-analyzer, cargo-watch, etc.)
+# With AI keyword detection
+nix build .#plentysound-full
+
+# Development shell (includes rust-analyzer, cargo-watch, libvosk, etc.)
 nix develop
+```
+
+#### Remote build (directly from GitHub)
+
+```bash
+# Soundboard only (default)
+nix build github:yuri-potatoq/plentysound
+
+# With AI keyword detection
+nix build github:yuri-potatoq/plentysound#plentysound-full
+
+# Run without installing
+nix run github:yuri-potatoq/plentysound
 ```
 
 ### Package builds

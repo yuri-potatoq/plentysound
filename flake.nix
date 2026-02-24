@@ -38,55 +38,26 @@
 
       perSystem = { system, pkgs, ... }:
         let
-          toolchain = (fenix.packages.${system}.toolchainOf { 
+          toolchain = (fenix.packages.${system}.toolchainOf {
             channel = "1.93.1";
             sha256 = "sha256-SBKjxhC6zHTu0SyJwxLlQHItzMzYZ71VCWQC2hOzpRY=";
           }).toolchain;
 
-          libvosk = pkgs.stdenv.mkDerivation {
-            pname = "libvosk";
-            version = "0.3.45";
-            src = pkgs.fetchurl {
-              url = "https://github.com/alphacep/vosk-api/releases/download/v0.3.45/vosk-linux-x86_64-0.3.45.zip";
-              sha256 = "sha256-u9yO2FxDl59kQxQoiXcOqVy/vFbP+1xdzXOvqHXF+7I=";
-            };
-            nativeBuildInputs = [ pkgs.unzip pkgs.autoPatchelfHook ];
-            buildInputs = [ pkgs.stdenv.cc.cc.lib ];
-            unpackPhase = "unzip $src";
-            installPhase = ''
-              mkdir -p $out/lib $out/include
-              cp vosk-linux-x86_64-0.3.45/libvosk.so $out/lib/
-              cp vosk-linux-x86_64-0.3.45/vosk_api.h $out/include/
-            '';
-          };
-
           craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
           src = craneLib.cleanCargoSource ./.;
 
-          commonArgs = {
-            inherit src;
-            strictDeps = true;
+          libvosk = pkgs.callPackage ./nix/libvosk.nix { };
 
-            nativeBuildInputs = [ pkgs.pkg-config ];
-            buildInputs = [
-              libvosk
-              pkgs.pipewire
-              pkgs.dbus
-            ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
-              pkgs.libiconv
-              pkgs.darwin.apple_sdk.frameworks.Security
-              pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
-            ];
-            LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
-          };
+          commonPkgArgs = { inherit craneLib src; };
 
-          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+          plentysound = pkgs.callPackage ./nix/package.nix commonPkgArgs;
 
-          myCrate = craneLib.buildPackage (commonArgs // {
-            inherit cargoArtifacts;
+          plentysound-full = pkgs.callPackage ./nix/package.nix (commonPkgArgs // {
+            inherit libvosk;
+            enableTranscriber = true;
           });
 
-          buildInputs = with pkgs; [
+          devBuildInputs = with pkgs; [
             # Rust tooling
             rust-analyzer
 
@@ -97,7 +68,7 @@
             pipewire
             dbus
             llvmPackages.libclang
-            
+
             # Dev utilities
             cargo-watch
             just
@@ -108,18 +79,21 @@
           ];
         in
         {
-          packages.default = myCrate;
+          packages = {
+            inherit plentysound plentysound-full;
+            default = plentysound;
+          };
 
           checks = {
-            inherit myCrate;
+            inherit plentysound;
 
-            clippy = craneLib.cargoClippy (commonArgs // {
-              inherit cargoArtifacts;
+            clippy = craneLib.cargoClippy (plentysound.passthru.baseArgs // {
+              inherit (plentysound.passthru) cargoArtifacts;
               cargoClippyExtraArgs = "--all-targets -- --deny warnings";
             });
 
-            tests = craneLib.cargoTest (commonArgs // {
-              inherit cargoArtifacts;
+            tests = craneLib.cargoTest (plentysound.passthru.baseArgs // {
+              inherit (plentysound.passthru) cargoArtifacts;
             });
 
             fmt = craneLib.cargoFmt { inherit src; };
@@ -131,14 +105,14 @@
 
           devShells.default = craneLib.devShell {
             checks = {
-              inherit myCrate;
+              inherit plentysound;
             };
             shellHook = ''
-              export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath buildInputs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+              export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath devBuildInputs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
               export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
             '';
 
-            packages = buildInputs;
+            packages = devBuildInputs;
 
             RUST_BACKTRACE = "1";
             RUST_LOG = "debug";
