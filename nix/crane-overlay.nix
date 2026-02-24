@@ -30,13 +30,14 @@ let
       lockFile = if cargoLock != null then cargoLock else "${src}/Cargo.lock";
 
       # Build regex pattern for Windows packages
+      # Use .* to match any suffix (e.g., winapi-i686-pc-windows-gnu)
       windowsPatternsRegex = lib.concatStringsSep "|" [
-        "winapi"
-        "windows-sys"
-        "windows-link"
-        "windows-targets"
+        "winapi.*"
+        "windows-sys.*"
+        "windows-link.*"
+        "windows-targets.*"
         "windows_.*"
-        "crossterm_winapi"
+        "crossterm_winapi.*"
       ];
 
       filterScript = pkgs.writeScript "filter-cargo-lock.py" ''
@@ -115,49 +116,35 @@ let
       '';
 in
 {
-  # Override vendorCargoDeps to filter Windows crates after vendoring
+  # Override vendorCargoDeps to filter Windows crates BEFORE vendoring
+  # This prevents downloading ~180MB of Windows packages entirely
   vendorCargoDeps = args:
     let
-      unfilteredVendor = cranePrev.vendorCargoDeps args;
-      pname = args.pname or "package";
-      # Import vendor filter helper
-      vendorFilterLib = import ./filter-vendor.nix {
-        inherit (pkgs) lib stdenv findutils;
-      };
-      filteredVendor = vendorFilterLib.filterVendorDir {
-        vendorDir = unfilteredVendor;
-        name = "${pname}-vendor-filtered";
-      };
+      # Reuse existing filterCargoLock function to remove Windows deps
+      filteredLock = filterCargoLock { inherit (args) src; };
     in
-      filteredVendor;
+      # Pass filtered Cargo.lock to crane - prevents downloading Windows packages!
+      cranePrev.vendorCargoDeps (args // {
+        cargoLock = filteredLock;
+      });
 
-  # Override buildDepsOnly to use filtered Cargo.lock AND filtered vendor
+  # Override buildDepsOnly to use filtered Cargo.lock
+  # This ensures cargo uses the filtered lock during dependency builds
   buildDepsOnly = args:
     let
       filteredLock = filterCargoLock { inherit (args) src; };
     in
       cranePrev.buildDepsOnly (args // {
-        # Use crane's replaceCargoLockHook to override Cargo.lock
         cargoLock = filteredLock;
-        # Use filtered vendor directory
-        cargoVendorDir = args.cargoVendorDir or (craneScope.vendorCargoDeps {
-          inherit (args) src;
-          pname = args.pname or "deps";
-        });
       });
 
-  # Override buildPackage to use filtered Cargo.lock AND filtered vendor
+  # Override buildPackage to use filtered Cargo.lock
+  # This ensures cargo uses the filtered lock during the final build
   buildPackage = args:
     let
       filteredLock = filterCargoLock { inherit (args) src; };
     in
       cranePrev.buildPackage (args // {
-        # Use crane's replaceCargoLockHook to override Cargo.lock
         cargoLock = filteredLock;
-        # Use filtered vendor directory
-        cargoVendorDir = args.cargoVendorDir or (craneScope.vendorCargoDeps {
-          inherit (args) src;
-          pname = args.pname or "package";
-        });
       });
 }
