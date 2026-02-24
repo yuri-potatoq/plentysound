@@ -116,7 +116,29 @@ nix run github:yuri-potatoq/plentysound
 
 ### Package builds
 
-> **TODO:** `.deb`, `.rpm`, and AUR packages are not yet available. Contributions welcome.
+The flake can produce `.deb`, `.rpm`, and AUR packages for both variants:
+
+| Package | Command |
+|---------|---------|
+| `.deb` (soundboard only) | `nix build .#deb` |
+| `.deb` (with keyword detection) | `nix build .#deb-full` |
+| `.rpm` (soundboard only) | `nix build .#rpm` |
+| `.rpm` (with keyword detection) | `nix build .#rpm-full` |
+| AUR `PKGBUILD` (soundboard only) | `nix build .#aur` |
+| AUR `PKGBUILD` (with keyword detection) | `nix build .#aur-full` |
+
+Install the built package with your distro's package manager:
+
+```bash
+# Debian/Ubuntu
+sudo dpkg -i result
+
+# Fedora/RHEL
+sudo rpm -i result/*.rpm
+
+# Arch (from the AUR output directory)
+cd result && makepkg -si
+```
 
 ## How to run
 
@@ -209,3 +231,22 @@ Daemon logs (useful for debugging detection and playback issues):
 ```bash
 cat ~/.local/share/plentysound/plentysound.log
 ```
+
+
+# Build all bundler variants                                                                                                                                                                                     │
+│ nix build .#deb          # produces plentysound_0.1.0_amd64.deb                                                                                                                                                  │
+│ nix build .#deb-full     # produces plentysound-full_0.1.0_amd64.deb                                                                                                                                             │
+│ nix build .#rpm          # produces plentysound-0.1.0-1.x86_64.rpm                                                                                                                                               │
+│ nix build .#rpm-full     # produces plentysound-full-0.1.0-1.x86_64.rpm                                                                                                                                          │
+│ nix build .#aur          # produces directory with PKGBUILD                                                                                                                                                      │
+│ nix build .#aur-full     # produces directory with PKGBUILD                                                                                                                                           
+│ # Verify .deb contents                                                                                                                                                                                           │
+│ dpkg-deb -c result       # list files                                                                                                                                                                            │
+│ dpkg-deb -I result       # show control info                                                                                                                                                                     │
+│                                                                                                                                                                                                                  │
+│ # Verify .rpm contents                                                                                                                                                                                           │
+│ rpm -qlp result           # list files                                                                                                                                                                           │
+│ rpm -qip result           # show package info                                                                                                                                                                    │
+│                                                                                                                                                                                                                  │
+│ # Flake evaluation                                                                                                                                                                                               │
+│ nix flake show            # all new packages listed   

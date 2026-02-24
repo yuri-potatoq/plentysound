@@ -82,6 +82,27 @@
           packages = {
             inherit plentysound plentysound-full;
             default = plentysound;
+
+            deb = pkgs.callPackage ./nix/bundlers/deb.nix { package = plentysound; };
+            deb-full = pkgs.callPackage ./nix/bundlers/deb.nix {
+              package = plentysound-full;
+              inherit libvosk;
+              enableTranscriber = true;
+            };
+
+            rpm = pkgs.callPackage ./nix/bundlers/rpm.nix { package = plentysound; };
+            rpm-full = pkgs.callPackage ./nix/bundlers/rpm.nix {
+              package = plentysound-full;
+              inherit libvosk;
+              enableTranscriber = true;
+            };
+
+            aur = pkgs.callPackage ./nix/bundlers/aur.nix { package = plentysound; };
+            aur-full = pkgs.callPackage ./nix/bundlers/aur.nix {
+              package = plentysound-full;
+              inherit libvosk;
+              enableTranscriber = true;
+            };
           };
 
           checks = {
