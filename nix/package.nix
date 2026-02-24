@@ -2,6 +2,7 @@
   craneLib,
   src,
   lib,
+  stdenv,
   pkg-config,
   pipewire,
   dbus,
@@ -9,12 +10,14 @@
   glibc,
   libiconv ? null,
   darwin ? null,
-  stdenv,
   libvosk ? null,
   enableTranscriber ? false,
 }:
 
 let
+  # Vendor filtering is now handled automatically by the crane overlay
+  # See nix/crane-overlay.nix for the implementation
+
   baseArgs = {
     inherit src;
     pname = "plentysound";
@@ -34,9 +37,15 @@ let
     ];
     LIBCLANG_PATH = "${llvmPackages.libclang.lib}/lib";
     BINDGEN_EXTRA_CLANG_ARGS = "-isystem ${glibc.dev}/include";
-    cargoExtraArgs = if enableTranscriber
-      then "--features transcriber"
-      else "-p plentysound";
+
+    # Skip building documentation for release builds (faster)
+    CARGO_BUILD_RUSTDOC = "false";
+
+    # Use --offline to build without network access (prevents re-adding Windows deps)
+    cargoExtraArgs = lib.concatStringsSep " " (
+      [ "--offline" ] ++
+      (if enableTranscriber then [ "--features" "transcriber" ] else [ "-p" "plentysound" ])
+    );
   } // lib.optionalAttrs enableTranscriber {
     LD_LIBRARY_PATH = lib.makeLibraryPath [ libvosk ];
   };

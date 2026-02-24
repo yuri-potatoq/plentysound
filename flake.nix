@@ -38,17 +38,37 @@
 
       perSystem = { system, pkgs, ... }:
         let
-          toolchain = (fenix.packages.${system}.toolchainOf {
+          # Toolchain setup
+          fenixToolchain = fenix.packages.${system}.toolchainOf {
             channel = "1.93.1";
             sha256 = "sha256-SBKjxhC6zHTu0SyJwxLlQHItzMzYZ71VCWQC2hOzpRY=";
-          }).toolchain;
+          };
 
-          craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
+          # Minimal toolchain for production builds (no docs)
+          buildToolchain = fenixToolchain.minimalToolchain;
+
+          # Complete toolchain for dev shell (with docs and rust-src)
+          devToolchain = fenixToolchain.withComponents [
+            "cargo"
+            "rustc"
+            "rust-src"
+            "rustfmt"
+            "clippy"
+            "rust-docs"
+          ];
+
+          # Create craneLib with toolchain and vendor filtering overlay
+          craneLib = ((crane.mkLib pkgs).overrideToolchain buildToolchain)
+            .overrideScope (import ./nix/crane-overlay.nix { inherit pkgs; });
+
           src = craneLib.cleanCargoSource ./.;
 
           libvosk = pkgs.callPackage ./nix/libvosk.nix { };
 
-          commonPkgArgs = { inherit craneLib src; };
+          commonPkgArgs = {
+            inherit craneLib src;
+            inherit (pkgs) lib stdenv;
+          };
 
           plentysound = pkgs.callPackage ./nix/package.nix commonPkgArgs;
 
@@ -124,7 +144,7 @@
             };
           };
 
-          devShells.default = craneLib.devShell {
+          devShells.default = (crane.mkLib pkgs).overrideToolchain(devToolchain).devShell {
             checks = {
               inherit plentysound;
             };
