@@ -177,35 +177,50 @@ in
     else
       cranePrev.downloadCargoPackage args;
 
-  # Override vendorCargoDeps to filter Windows crates BEFORE vendoring
-  # This prevents downloading ~180MB of Windows packages entirely
+  # Override vendorCargoDeps to filter Windows crates AFTER vendoring
+  # This removes Windows packages from the vendor directory
   vendorCargoDeps = args:
     let
-      # Reuse existing filterCargoLock function to remove Windows deps
-      filteredLock = filterCargoLock { inherit (args) src; };
+      unfilteredVendor = cranePrev.vendorCargoDeps args;
+      pname = args.pname or "package";
+      # Import vendor filter helper
+      vendorFilterLib = import ./filter-vendor.nix {
+        inherit (pkgs) lib stdenv findutils;
+      };
+      filteredVendor = vendorFilterLib.filterVendorDir {
+        vendorDir = unfilteredVendor;
+        name = "${pname}-vendor-filtered";
+      };
     in
-      # Pass filtered Cargo.lock to crane - prevents downloading Windows packages!
-      cranePrev.vendorCargoDeps (args // {
-        cargoLock = filteredLock;
-      });
+      filteredVendor;
 
-  # Override buildDepsOnly to use filtered Cargo.lock
-  # This ensures cargo uses the filtered lock during dependency builds
+  # Override buildDepsOnly to use filtered Cargo.lock AND filtered vendor
   buildDepsOnly = args:
     let
       filteredLock = filterCargoLock { inherit (args) src; };
     in
       cranePrev.buildDepsOnly (args // {
+        # Use crane's replaceCargoLockHook to override Cargo.lock
         cargoLock = filteredLock;
+        # Use filtered vendor directory
+        cargoVendorDir = args.cargoVendorDir or (craneScope.vendorCargoDeps {
+          inherit (args) src;
+          pname = args.pname or "deps";
+        });
       });
 
-  # Override buildPackage to use filtered Cargo.lock
-  # This ensures cargo uses the filtered lock during the final build
+  # Override buildPackage to use filtered Cargo.lock AND filtered vendor
   buildPackage = args:
     let
       filteredLock = filterCargoLock { inherit (args) src; };
     in
       cranePrev.buildPackage (args // {
+        # Use crane's replaceCargoLockHook to override Cargo.lock
         cargoLock = filteredLock;
+        # Use filtered vendor directory
+        cargoVendorDir = args.cargoVendorDir or (craneScope.vendorCargoDeps {
+          inherit (args) src;
+          pname = args.pname or "package";
+        });
       });
 }
