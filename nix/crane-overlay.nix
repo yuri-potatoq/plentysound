@@ -24,57 +24,9 @@ let
   isWindowsPackage = name:
     lib.any (pattern: builtins.match pattern name != null) windowsPatterns;
 
-  # Generate crates.io-index path for a crate name
-  # Path structure: 1/<name>, 2/<name>, 3/<c>/<name>, or <cc>/<cc>/<name>
-  crateIndexPath = name:
-    let
-      len = builtins.stringLength name;
-    in
-      if len == 1 then "1/${name}"
-      else if len == 2 then "2/${name}"
-      else if len == 3 then "3/${builtins.substring 0 1 name}/${name}"
-      else "${builtins.substring 0 2 name}/${builtins.substring 2 2 name}/${name}";
-
-  # Metadata hashes for Windows crates from crates.io-index
-  # These change rarely, only when new versions are published
-  metadataHashes = {
-    "crossterm_winapi" = lib.fakeHash;
-    "winapi" = lib.fakeHash;
-    "winapi-i686-pc-windows-gnu" = lib.fakeHash;
-    "winapi-x86_64-pc-windows-gnu" = lib.fakeHash;
-    "windows-sys" = lib.fakeHash;
-    "windows-targets" = lib.fakeHash;
-    "windows-link" = lib.fakeHash;
-  };
-
-  # Create minimal stub derivation using crates.io-index metadata
-  # Fetches only small JSON file (~10KB) instead of full .crate tarball (~1MB+)
-  createMinimalStub = { name, version, checksum, ... }:
-    let
-      indexPath = crateIndexPath name;
-      metadataUrl = "https://raw.githubusercontent.com/rust-lang/crates.io-index/master/${indexPath}";
-
-      # Fetch metadata JSON using same pattern as crane's downloadCargoPackage
-      metadataFile = pkgs.fetchurl {
-        url = metadataUrl;
-        name = "${name}-metadata.json";
-        sha256 = metadataHashes.${name} or lib.fakeHash;
-      };
-
-      # Parse NDJSON (one JSON object per line)
-      rawContent = builtins.readFile metadataFile;
-      lines = lib.filter (l: l != "") (lib.splitString "\n" rawContent);
-      allVersions = map builtins.fromJSON lines;
-      ourVersion = lib.findFirst (v: v.vers == version) null allVersions;
-      features = if ourVersion != null then ourVersion.features else {};
-
-      # Convert features to TOML format
-      featuresToml = lib.concatStringsSep "\n" (
-        lib.mapAttrsToList (fname: fdeps:
-          "${fname} = [${lib.concatMapStringsSep ", " (d: ''"${d}"'') fdeps}]"
-        ) features
-      );
-    in
+  # Create minimal stub derivation for a Windows package
+  # Only creates the minimum files needed for cargo to validate the vendor directory
+  createMinimalStub = { name, version, ... }:
     pkgs.runCommandLocal "cargo-package-${name}-${version}" {} ''
       mkdir -p $out/src
 
@@ -88,18 +40,133 @@ let
       path = "src/lib.rs"
 
       [features]
-      ${featuresToml}
+      default = []
       EOF
 
-      # Create stub source files
       echo "// Minimal stub for Windows-only crate ${name}" > $out/src/lib.rs
 
-      # Stub build.rs
-      echo "fn main() {}" > $out/build.rs
-
-      # Create checksum file
-      echo '{"files":{},"package":"${checksum}"}' > $out/.cargo-checksum.json
+      echo '{"files":{},"package":null}' > $out/.cargo-checksum.json
     '';
+
+  # Filter Cargo.lock to remove Windows dependencies using Python script
+  filterCargoLock = { src, cargoLock ? null }:
+    let
+      lockFile = if cargoLock != null then cargoLock else "${src}/Cargo.lock";
+
+      # Build regex pattern for Windows packages
+      # Use .* to match any suffix (e.g., winapi-i686-pc-windows-gnu)
+      windowsPatternsRegex = lib.concatStringsSep "|" [
+        "winapi.*"
+        "windows-sys.*"
+        "windows-link.*"
+        "windows-targets.*"
+        "windows_.*"
+        "crossterm_winapi.*"
+      ];
+
+      filterScript = pkgs.writeScript "filter-cargo-lock.py" ''
+        #!${pkgs.python3}/bin/python3
+        import re
+        import sys
+
+        # Read original Cargo.lock
+        with open(sys.argv[1], "r") as f:
+            lines = f.readlines()
+
+        # Patterns for Windows packages
+        windowsPatternsRegex = "${windowsPatternsRegex}"
+        windows_patterns = re.compile(r'^name = "(' + windowsPatternsRegex + r')"')
+
+        # First pass: identify Windows packages
+        windows_package_names = set()
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            if line.startswith('[[package]]'):
+                # Check if this is a Windows package
+                j = i + 1
+                pkg_name = None
+                while j < len(lines) and not lines[j].startswith('[[package]]'):
+                    if lines[j].startswith('name = '):
+                        name_match = re.match(r'name = "([^"]+)"', lines[j])
+                        if name_match:
+                            pkg_name = name_match.group(1)
+                            break
+                    j += 1
+                if pkg_name and windows_patterns.match('name = "' + pkg_name + '"'):
+                    windows_package_names.add(pkg_name)
+            i += 1
+
+        # Second pass: filter out Windows packages and their dependencies
+        output_lines = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+
+            if line.startswith('[[package]]'):
+                # Check if this package should be filtered
+                j = i + 1
+                pkg_name = None
+                # Scan forward to find package name and next [[package]]
+                while j < len(lines) and not lines[j].startswith('[[package]]'):
+                    if pkg_name is None and lines[j].startswith('name = '):
+                        name_match = re.match(r'name = "([^"]+)"', lines[j])
+                        if name_match:
+                            pkg_name = name_match.group(1)
+                            # Don't break - continue to find next [[package]]
+                    j += 1
+
+                if pkg_name and pkg_name in windows_package_names:
+                    # Skip this entire package block (j now points to next [[package]] or EOF)
+                    i = j
+                    continue
+                else:
+                    # Process this package block
+                    output_lines.append(line)
+                    i += 1
+
+                    # Process package content, filtering dependencies
+                    in_dependencies = False
+                    while i < len(lines) and not lines[i].startswith('[[package]]'):
+                        if lines[i].startswith('dependencies = ['):
+                            in_dependencies = True
+                            output_lines.append(lines[i])
+                            i += 1
+
+                            # Filter dependency lines
+                            while i < len(lines) and not lines[i].strip() == ']':
+                                dep_line = lines[i]
+                                # Extract dependency name (line format: ' "dep_name version",\n')
+                                dep_match = re.match(r'\s*"([^\s"]+)', dep_line)
+                                if dep_match:
+                                    dep_name = dep_match.group(1)
+                                    if dep_name not in windows_package_names:
+                                        output_lines.append(dep_line)
+                                    # else: skip this Windows dependency
+                                else:
+                                    # Not a dependency line, keep it
+                                    output_lines.append(dep_line)
+                                i += 1
+
+                            # Add closing bracket
+                            if i < len(lines):
+                                output_lines.append(lines[i])
+                                i += 1
+                            in_dependencies = False
+                        else:
+                            output_lines.append(lines[i])
+                            i += 1
+            else:
+                output_lines.append(line)
+                i += 1
+
+        # Write output
+        sys.stdout.write('''.join(output_lines))
+      '';
+    in
+      pkgs.runCommand "Cargo.lock-filtered" {} ''
+        ${filterScript} ${lockFile} > $out
+      '';
 in
 {
   # Override downloadCargoPackage to create stubs for Windows packages
@@ -109,4 +176,36 @@ in
       createMinimalStub args
     else
       cranePrev.downloadCargoPackage args;
+
+  # Override vendorCargoDeps to filter Windows crates BEFORE vendoring
+  # This prevents downloading ~180MB of Windows packages entirely
+  vendorCargoDeps = args:
+    let
+      # Reuse existing filterCargoLock function to remove Windows deps
+      filteredLock = filterCargoLock { inherit (args) src; };
+    in
+      # Pass filtered Cargo.lock to crane - prevents downloading Windows packages!
+      cranePrev.vendorCargoDeps (args // {
+        cargoLock = filteredLock;
+      });
+
+  # Override buildDepsOnly to use filtered Cargo.lock
+  # This ensures cargo uses the filtered lock during dependency builds
+  buildDepsOnly = args:
+    let
+      filteredLock = filterCargoLock { inherit (args) src; };
+    in
+      cranePrev.buildDepsOnly (args // {
+        cargoLock = filteredLock;
+      });
+
+  # Override buildPackage to use filtered Cargo.lock
+  # This ensures cargo uses the filtered lock during the final build
+  buildPackage = args:
+    let
+      filteredLock = filterCargoLock { inherit (args) src; };
+    in
+      cranePrev.buildPackage (args // {
+        cargoLock = filteredLock;
+      });
 }
