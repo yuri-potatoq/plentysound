@@ -50,12 +50,8 @@ let
     LD_LIBRARY_PATH = lib.makeLibraryPath [ libvosk ];
   };
 
-  # Build dependencies only for the main binary targets, not tests/benches
-  # This prevents cargo from resolving Windows-specific dependencies
-  cargoArtifacts = craneLib.buildDepsOnly (baseArgs // {
-    # Skip cargo check for now to test if build works
-    doCheck = false;
-  });
+  # Build dependencies
+  cargoArtifacts = craneLib.buildDepsOnly baseArgs;
 in
 craneLib.buildPackage (baseArgs // {
   inherit cargoArtifacts;

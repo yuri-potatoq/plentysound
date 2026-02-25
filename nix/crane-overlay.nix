@@ -116,45 +116,27 @@ let
       '';
 in
 {
-  # Override vendorCargoDeps to skip Windows packages during vendoring
+  # Override vendorCargoDeps to patch Windows packages
   # Uses crane's overrideVendorCargoPackage hook to intercept each package
   vendorCargoDeps = args:
     cranePrev.vendorCargoDeps (args // {
       # Override individual package downloads
       overrideVendorCargoPackage = pkg: drv:
         if isWindowsPackage pkg.name then
-          # Return a stub derivation that creates a minimal valid Rust crate
-          # This satisfies cargo's validation without downloading Windows packages
-          pkgs.runCommandLocal "stub-${pkg.name}-${pkg.version}" {} ''
-            mkdir -p $out/src
-
-            # Create a minimal Cargo.toml that declares the package
-            cat > $out/Cargo.toml <<'EOF'
-            [package]
-            name = "${pkg.name}"
-            version = "${pkg.version}"
-            edition = "2021"
-
-            [lib]
-            path = "src/lib.rs"
-            EOF
-
-            # Replace template variables
-            sed -i "s/\${pkg.name}/${pkg.name}/g" $out/Cargo.toml
-            sed -i "s/\${pkg.version}/${pkg.version}/g" $out/Cargo.toml
-
-            # Create an empty library source file
-            cat > $out/src/lib.rs <<EOF
-            // Stub implementation for ${pkg.name}
-            // This is a Windows-only crate excluded from Linux builds
-            EOF
-
-            # Create a valid .cargo-checksum.json
-            # Cargo checks this file to verify package integrity
-            cat > $out/.cargo-checksum.json <<EOF
-            {"files":{},"package":null}
-            EOF
-          ''
+          # Download the real package but stub its build.rs script
+          # This preserves type definitions while preventing Windows-specific build steps
+          drv.overrideAttrs (old: {
+            postPatch = (old.postPatch or "") + ''
+              # Only stub build.rs for platform-specific crates
+              # Leave lib.rs intact so build deps can still resolve types
+              if [ -f build.rs ]; then
+                if grep -q "windows\|winapi" build.rs 2>/dev/null || grep -q "cfg.*windows" build.rs 2>/dev/null; then
+                  echo "Stubbing build.rs for Windows-specific crate ${pkg.name}"
+                  echo 'fn main() {}' > build.rs
+                fi
+              fi
+            '';
+          })
         else
           # Keep original derivation for non-Windows packages
           drv;

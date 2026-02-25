@@ -250,3 +250,23 @@ cat ~/.local/share/plentysound/plentysound.log
 │                                                                                                                                                                                                                  │
 │ # Flake evaluation                                                                                                                                                                                               │
 │ nix flake show            # all new packages listed   
+
+
+
+ 1. List all dependencies sorted by size (descending):
+  nix path-info -rS .#plentysound | sort -hk2 -r | head -50
+
+  2. Get total closure size:
+  nix path-info -S .#plentysound
+
+  3. Show size breakdown with better formatting:
+  nix path-info -rSh .#plentysound | awk '{printf "%10s  %s\n", $2, $1}' | sort -hr | head -50
+
+  4. Filter for Windows packages specifically:
+  nix path-info -rS .#plentysound | grep -E "(winapi|windows|crossterm_winapi)" | sort -hk2 -r
+
+  5. Generate a dependency graph (requires graphviz):
+  nix-store --query --graph $(nix-build --no-out-link .#plentysound) | dot -Tpng > deps.png
+
+  6. Interactive tree view with sizes:
+  nix-store -qR $(nix-build --no-out-link .#plentysound) | xargs du -sh | sort -hr | head -50
