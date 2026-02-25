@@ -116,35 +116,47 @@ let
       '';
 in
 {
-  # Override vendorCargoDeps to filter Windows crates BEFORE vendoring
-  # This prevents downloading ~180MB of Windows packages entirely
+  # Override vendorCargoDeps to skip Windows packages during vendoring
+  # Uses crane's overrideVendorCargoPackage hook to intercept each package
   vendorCargoDeps = args:
-    let
-      # Reuse existing filterCargoLock function to remove Windows deps
-      filteredLock = filterCargoLock { inherit (args) src; };
-    in
-      # Pass filtered Cargo.lock to crane - prevents downloading Windows packages!
-      cranePrev.vendorCargoDeps (args // {
-        cargoLock = filteredLock;
-      });
+    cranePrev.vendorCargoDeps (args // {
+      # Override individual package downloads
+      overrideVendorCargoPackage = pkg: drv:
+        if isWindowsPackage pkg.name then
+          # Return a stub derivation that creates a minimal valid Rust crate
+          # This satisfies cargo's validation without downloading Windows packages
+          pkgs.runCommandLocal "stub-${pkg.name}-${pkg.version}" {} ''
+            mkdir -p $out/src
 
-  # Override buildDepsOnly to use filtered Cargo.lock
-  # This ensures cargo uses the filtered lock during dependency builds
-  buildDepsOnly = args:
-    let
-      filteredLock = filterCargoLock { inherit (args) src; };
-    in
-      cranePrev.buildDepsOnly (args // {
-        cargoLock = filteredLock;
-      });
+            # Create a minimal Cargo.toml that declares the package
+            cat > $out/Cargo.toml <<'EOF'
+            [package]
+            name = "${pkg.name}"
+            version = "${pkg.version}"
+            edition = "2021"
 
-  # Override buildPackage to use filtered Cargo.lock
-  # This ensures cargo uses the filtered lock during the final build
-  buildPackage = args:
-    let
-      filteredLock = filterCargoLock { inherit (args) src; };
-    in
-      cranePrev.buildPackage (args // {
-        cargoLock = filteredLock;
-      });
+            [lib]
+            path = "src/lib.rs"
+            EOF
+
+            # Replace template variables
+            sed -i "s/\${pkg.name}/${pkg.name}/g" $out/Cargo.toml
+            sed -i "s/\${pkg.version}/${pkg.version}/g" $out/Cargo.toml
+
+            # Create an empty library source file
+            cat > $out/src/lib.rs <<EOF
+            // Stub implementation for ${pkg.name}
+            // This is a Windows-only crate excluded from Linux builds
+            EOF
+
+            # Create a valid .cargo-checksum.json
+            # Cargo checks this file to verify package integrity
+            cat > $out/.cargo-checksum.json <<EOF
+            {"files":{},"package":null}
+            EOF
+          ''
+        else
+          # Keep original derivation for non-Windows packages
+          drv;
+    });
 }
