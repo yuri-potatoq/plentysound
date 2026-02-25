@@ -1,5 +1,5 @@
-# Crane overlay to filter Windows dependencies from Cargo.lock before vendoring
-# This prevents downloading Windows cargo packages entirely
+# Crane overlay to create minimal stub derivations for Windows packages
+# This avoids downloading ~180MB of Windows-only code that we never use
 #
 # Usage in flake.nix:
 #   craneLib = (crane.mkLib pkgs).overrideScope (import ./nix/crane-overlay.nix { inherit pkgs; })
@@ -24,121 +24,89 @@ let
   isWindowsPackage = name:
     lib.any (pattern: builtins.match pattern name != null) windowsPatterns;
 
-  # Filter Cargo.lock to remove Windows dependencies using Python script
-  filterCargoLock = { src, cargoLock ? null }:
+  # Generate crates.io-index path for a crate name
+  # Path structure: 1/<name>, 2/<name>, 3/<c>/<name>, or <cc>/<cc>/<name>
+  crateIndexPath = name:
     let
-      lockFile = if cargoLock != null then cargoLock else "${src}/Cargo.lock";
-
-      # Build regex pattern for Windows packages
-      # Use .* to match any suffix (e.g., winapi-i686-pc-windows-gnu)
-      windowsPatternsRegex = lib.concatStringsSep "|" [
-        "winapi.*"
-        "windows-sys.*"
-        "windows-link.*"
-        "windows-targets.*"
-        "windows_.*"
-        "crossterm_winapi.*"
-      ];
-
-      filterScript = pkgs.writeScript "filter-cargo-lock.py" ''
-        #!${pkgs.python3}/bin/python3
-        import re
-        import sys
-
-        # Read original Cargo.lock
-        with open(sys.argv[1], "r") as f:
-            content = f.read()
-
-        # Patterns for Windows packages
-        windows_patterns = re.compile(r'^name = "(${windowsPatternsRegex})"', re.MULTILINE)
-
-        # Split into package blocks
-        packages = content.split('\n[[package]]')
-        header = packages[0]
-        package_blocks = packages[1:]
-
-        filtered_blocks = []
-        windows_package_names = set()
-
-        # First pass: identify Windows packages
-        for block in package_blocks:
-            if windows_patterns.search(block):
-                # Extract package name
-                name_match = re.search(r'^name = "([^"]+)"', block, re.MULTILINE)
-                if name_match:
-                    windows_package_names.add(name_match.group(1))
-            else:
-                filtered_blocks.append(block)
-
-        # Second pass: remove Windows dependencies from remaining packages
-        final_blocks = []
-        for block in filtered_blocks:
-            # Find dependencies section
-            deps_match = re.search(r'(dependencies = \[)(.*?)(\])', block, re.DOTALL)
-            if deps_match:
-                deps_content = deps_match.group(2)
-                # Filter out Windows dependencies
-                deps_lines = deps_content.strip().split('\n')
-                filtered_deps = []
-                for line in deps_lines:
-                    line = line.strip()
-                    if not line or line == ',':
-                        continue
-                    # Remove trailing comma if present
-                    line = line.rstrip(',').strip()
-                    if not line:
-                        continue
-                    # Extract dependency name (handle both "name" and "name version" formats)
-                    dep_match = re.search(r'"([^"\s]+)', line)
-                    if dep_match:
-                        dep_name = dep_match.group(1)
-                        if dep_name not in windows_package_names:
-                            filtered_deps.append(line)
-
-                # Reconstruct dependencies
-                if filtered_deps:
-                    new_deps = deps_match.group(1) + '\n  ' + ',\n  '.join(filtered_deps) + ',\n' + deps_match.group(3)
-                else:
-                    new_deps = 'dependencies = []'
-
-                block = block[:deps_match.start()] + new_deps + block[deps_match.end():]
-
-            final_blocks.append(block)
-
-        # Reconstruct Cargo.lock
-        print(header, end="")
-        for block in final_blocks:
-            print('\n[[package]]' + block, end="")
-      '';
+      len = builtins.stringLength name;
     in
-      pkgs.runCommand "Cargo.lock-filtered" {} ''
-        ${filterScript} ${lockFile} > $out
-      '';
+      if len == 1 then "1/${name}"
+      else if len == 2 then "2/${name}"
+      else if len == 3 then "3/${builtins.substring 0 1 name}/${name}"
+      else "${builtins.substring 0 2 name}/${builtins.substring 2 2 name}/${name}";
+
+  # Metadata hashes for Windows crates from crates.io-index
+  # These change rarely, only when new versions are published
+  metadataHashes = {
+    "crossterm_winapi" = lib.fakeHash;
+    "winapi" = lib.fakeHash;
+    "winapi-i686-pc-windows-gnu" = lib.fakeHash;
+    "winapi-x86_64-pc-windows-gnu" = lib.fakeHash;
+    "windows-sys" = lib.fakeHash;
+    "windows-targets" = lib.fakeHash;
+    "windows-link" = lib.fakeHash;
+  };
+
+  # Create minimal stub derivation using crates.io-index metadata
+  # Fetches only small JSON file (~10KB) instead of full .crate tarball (~1MB+)
+  createMinimalStub = { name, version, checksum, ... }:
+    let
+      indexPath = crateIndexPath name;
+      metadataUrl = "https://raw.githubusercontent.com/rust-lang/crates.io-index/master/${indexPath}";
+
+      # Fetch metadata JSON using same pattern as crane's downloadCargoPackage
+      metadataFile = pkgs.fetchurl {
+        url = metadataUrl;
+        name = "${name}-metadata.json";
+        sha256 = metadataHashes.${name} or lib.fakeHash;
+      };
+
+      # Parse NDJSON (one JSON object per line)
+      rawContent = builtins.readFile metadataFile;
+      lines = lib.filter (l: l != "") (lib.splitString "\n" rawContent);
+      allVersions = map builtins.fromJSON lines;
+      ourVersion = lib.findFirst (v: v.vers == version) null allVersions;
+      features = if ourVersion != null then ourVersion.features else {};
+
+      # Convert features to TOML format
+      featuresToml = lib.concatStringsSep "\n" (
+        lib.mapAttrsToList (fname: fdeps:
+          "${fname} = [${lib.concatMapStringsSep ", " (d: ''"${d}"'') fdeps}]"
+        ) features
+      );
+    in
+    pkgs.runCommandLocal "cargo-package-${name}-${version}" {} ''
+      mkdir -p $out/src
+
+      cat > $out/Cargo.toml <<EOF
+      [package]
+      name = "${name}"
+      version = "${version}"
+      edition = "2021"
+
+      [lib]
+      path = "src/lib.rs"
+
+      [features]
+      ${featuresToml}
+      EOF
+
+      # Create stub source files
+      echo "// Minimal stub for Windows-only crate ${name}" > $out/src/lib.rs
+
+      # Stub build.rs
+      echo "fn main() {}" > $out/build.rs
+
+      # Create checksum file
+      echo '{"files":{},"package":"${checksum}"}' > $out/.cargo-checksum.json
+    '';
 in
 {
-  # Override vendorCargoDeps to patch Windows packages
-  # Uses crane's overrideVendorCargoPackage hook to intercept each package
-  vendorCargoDeps = args:
-    cranePrev.vendorCargoDeps (args // {
-      # Override individual package downloads
-      overrideVendorCargoPackage = pkg: drv:
-        if isWindowsPackage pkg.name then
-          # Download the real package but stub its build.rs script
-          # This preserves type definitions while preventing Windows-specific build steps
-          drv.overrideAttrs (old: {
-            postPatch = (old.postPatch or "") + ''
-              # Only stub build.rs for platform-specific crates
-              # Leave lib.rs intact so build deps can still resolve types
-              if [ -f build.rs ]; then
-                if grep -q "windows\|winapi" build.rs 2>/dev/null || grep -q "cfg.*windows" build.rs 2>/dev/null; then
-                  echo "Stubbing build.rs for Windows-specific crate ${pkg.name}"
-                  echo 'fn main() {}' > build.rs
-                fi
-              fi
-            '';
-          })
-        else
-          # Keep original derivation for non-Windows packages
-          drv;
-    });
+  # Override downloadCargoPackage to create stubs for Windows packages
+  # This intercepts at the lowest level before any downloads happen
+  downloadCargoPackage = args:
+    if isWindowsPackage args.name then
+      createMinimalStub args
+    else
+      cranePrev.downloadCargoPackage args;
 }
