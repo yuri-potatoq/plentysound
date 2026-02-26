@@ -250,3 +250,4 @@ cat ~/.local/share/plentysound/plentysound.log
 │                                                                                                                                                                                                                  │
 │ # Flake evaluation                                                                                                                                                                                               │
 │ nix flake show            # all new packages listed   
+

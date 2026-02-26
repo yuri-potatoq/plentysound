@@ -1,0 +1,135 @@
+name: Release Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v0.1.0 or leave empty for timestamp)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            accept-flake-config = true
+
+      - name: Setup Cachix
+        uses: cachix/cachix-action@v15
+        with:
+          name: plentysound
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          pushFilter: "(-source$|-drv$)"
+
+      - name: Build DEB packages
+        run: |
+          nix build .#deb -L -o result-deb
+          nix build .#deb-full -L -o result-deb-full
+
+      - name: Build RPM packages
+        run: |
+          nix build .#rpm -L -o result-rpm
+          nix build .#rpm-full -L -o result-rpm-full
+
+      - name: Build AUR packages
+        run: |
+          nix build .#aur -L -o result-aur
+          nix build .#aur-full -L -o result-aur-full
+
+      - name: Collect and organize artifacts
+        run: |
+          mkdir -p release-artifacts
+
+          # Copy DEB files (single .deb files)
+          cp result-deb/*.deb release-artifacts/plentysound_0.1.0_amd64.deb
+          cp result-deb-full/*.deb release-artifacts/plentysound-full_0.1.0_amd64.deb
+
+          # Copy RPM files (single .rpm files)
+          cp result-rpm/*.rpm release-artifacts/plentysound-0.1.0-1.x86_64.rpm
+          cp result-rpm-full/*.rpm release-artifacts/plentysound-full-0.1.0-1.x86_64.rpm
+
+          # Compress AUR packages (directories) with parallel zstd
+          tar --use-compress-program="zstd -T0" -cf release-artifacts/plentysound-aur-0.1.0.tar.zst -C result-aur .
+          tar --use-compress-program="zstd -T0" -cf release-artifacts/plentysound-full-aur-0.1.0.tar.zst -C result-aur-full .
+
+      - name: Generate checksums
+        run: |
+          cd release-artifacts
+          sha256sum * > SHA256SUMS
+
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=release-$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Release ${{ steps.tag.outputs.tag }}
+          body: |
+            # PlentySound Release
+
+            This release includes packages for multiple Linux distributions:
+
+            ## Installation
+
+            ### Debian/Ubuntu (DEB)
+            ```bash
+            # Standard version
+            sudo dpkg -i plentysound_0.1.0_amd64.deb
+
+            # Full version (with all features)
+            sudo dpkg -i plentysound-full_0.1.0_amd64.deb
+            ```
+
+            ### Fedora/RHEL/CentOS (RPM)
+            ```bash
+            # Standard version
+            sudo rpm -i plentysound-0.1.0-1.x86_64.rpm
+
+            # Full version (with all features)
+            sudo rpm -i plentysound-full-0.1.0-1.x86_64.rpm
+            ```
+
+            ### Arch Linux (AUR)
+            ```bash
+            # Extract and build standard version
+            tar --use-compress-program=zstd -xf plentysound-aur-0.1.0.tar.zst
+            cd plentysound-aur-0.1.0
+            makepkg -si
+
+            # Or extract and build full version
+            tar --use-compress-program=zstd -xf plentysound-full-aur-0.1.0.tar.zst
+            cd plentysound-full-aur-0.1.0
+            makepkg -si
+            ```
+
+            ## Verify Checksums
+            ```bash
+            # Download SHA256SUMS and verify
+            sha256sum -c SHA256SUMS
+            ```
+
+            ## Package Variants
+            - **Standard**: Basic plentysound package
+            - **Full**: Includes all optional features and dependencies
+          files: |
+            release-artifacts/*
+          draft: false
+          prerelease: false

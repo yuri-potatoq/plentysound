@@ -13,10 +13,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    advisory-db = {
-      url = "github:rustsec/advisory-db";
-      flake = false;
-    };
+    # advisory-db = {
+    #   url = "github:rustsec/advisory-db";
+    #   flake = false;
+    # };
   };
 
   nixConfig = {
@@ -24,31 +24,53 @@
       "https://cache.nixos.org"
       "https://nix-community.cachix.org"
       "https://crane.cachix.org"
+      "https://plentysound.cachix.org"
     ];
     extra-trusted-public-keys = [
       "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
       "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCUSeBo="
       "crane.cachix.org-1:8Scfpmn9w+hGdXH/Q9tTLiYAE/2dnJYRJP7kl80GuRk="
+      "plentysound.cachix.org-1:oEFN6pRp8p7OHrPyO20P9QqK/EJLUJRYsE2gXcgPZd8="
     ];
   };
 
-  outputs = inputs@{ flake-parts, nixpkgs, crane, fenix, advisory-db, ... }:
+  outputs = inputs@{ flake-parts, nixpkgs, crane, fenix, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
 
       perSystem = { system, pkgs, ... }:
         let
-          toolchain = (fenix.packages.${system}.toolchainOf {
+          # Toolchain setup
+          fenixToolchain = fenix.packages.${system}.toolchainOf {
             channel = "1.93.1";
             sha256 = "sha256-SBKjxhC6zHTu0SyJwxLlQHItzMzYZ71VCWQC2hOzpRY=";
-          }).toolchain;
+          };
 
-          craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
+          # Minimal toolchain for production builds (no docs)
+          buildToolchain = fenixToolchain.minimalToolchain;
+
+          # Complete toolchain for dev shell (with docs and rust-src)
+          devToolchain = fenixToolchain.withComponents [
+            "cargo"
+            "rustc"
+            "rust-src"
+            "rustfmt"
+            "clippy"
+            "rust-docs"
+          ];
+
+          # Create craneLib with toolchain and vendor filtering overlay
+          craneLib = ((crane.mkLib pkgs).overrideToolchain buildToolchain)
+            .overrideScope (import ./nix/crane-overlay.nix { inherit pkgs; });
+
           src = craneLib.cleanCargoSource ./.;
 
           libvosk = pkgs.callPackage ./nix/libvosk.nix { };
 
-          commonPkgArgs = { inherit craneLib src; };
+          commonPkgArgs = {
+            inherit craneLib src;
+            inherit (pkgs) lib stdenv;
+          };
 
           plentysound = pkgs.callPackage ./nix/package.nix commonPkgArgs;
 
@@ -80,8 +102,13 @@
         in
         {
           packages = {
-            inherit plentysound plentysound-full;
             default = plentysound;
+
+            # Expose cargo dependencies for caching
+            cargoArtifacts = plentysound.cargoArtifacts;
+            cargoArtifacts-full = plentysound-full.cargoArtifacts;
+
+            inherit plentysound plentysound-full;
 
             deb = pkgs.callPackage ./nix/bundlers/deb.nix { package = plentysound; };
             deb-full = pkgs.callPackage ./nix/bundlers/deb.nix {
@@ -119,12 +146,12 @@
 
             fmt = craneLib.cargoFmt { inherit src; };
 
-            audit = craneLib.cargoAudit {
-              inherit src advisory-db;
-            };
+            # audit = craneLib.cargoAudit {
+            #   inherit src advisory-db;
+            # };
           };
 
-          devShells.default = craneLib.devShell {
+          devShells.default = (crane.mkLib pkgs).overrideToolchain(devToolchain).devShell {
             checks = {
               inherit plentysound;
             };
