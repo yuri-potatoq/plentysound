@@ -2,7 +2,7 @@ name: Nix Checks
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 jobs:
   checks:

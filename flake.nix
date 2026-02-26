@@ -30,7 +30,7 @@
       "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
       "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCUSeBo="
       "crane.cachix.org-1:8Scfpmn9w+hGdXH/Q9tTLiYAE/2dnJYRJP7kl80GuRk="
-      "plentysound.cachix.org-1:YOUR_PUBLIC_KEY_HERE"
+      "plentysound.cachix.org-1:oEFN6pRp8p7OHrPyO20P9QqK/EJLUJRYsE2gXcgPZd8="
     ];
   };
 
@@ -89,7 +89,7 @@
             libvosk
             pipewire
             dbus
-            llvmPackages_16.libclang
+            llvmPackages.libclang
 
             # Dev utilities
             cargo-watch
@@ -157,7 +157,7 @@
             };
             shellHook = ''
               export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath devBuildInputs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-              export LIBCLANG_PATH="${pkgs.llvmPackages_16.libclang.lib}/lib"
+              export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
             '';
 
             packages = devBuildInputs;
