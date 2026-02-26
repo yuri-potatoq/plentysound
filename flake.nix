@@ -24,11 +24,13 @@
       "https://cache.nixos.org"
       "https://nix-community.cachix.org"
       "https://crane.cachix.org"
+      "https://plentysound.cachix.org"
     ];
     extra-trusted-public-keys = [
       "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
       "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCUSeBo="
       "crane.cachix.org-1:8Scfpmn9w+hGdXH/Q9tTLiYAE/2dnJYRJP7kl80GuRk="
+      "plentysound.cachix.org-1:YOUR_PUBLIC_KEY_HERE"
     ];
   };
 
@@ -87,7 +89,7 @@
             libvosk
             pipewire
             dbus
-            llvmPackages.libclang
+            llvmPackages_16.libclang
 
             # Dev utilities
             cargo-watch
@@ -100,8 +102,13 @@
         in
         {
           packages = {
-            inherit plentysound plentysound-full;
             default = plentysound;
+
+            # Expose cargo dependencies for caching
+            cargoArtifacts = plentysound.cargoArtifacts;
+            cargoArtifacts-full = plentysound-full.cargoArtifacts;
+
+            inherit plentysound plentysound-full;
 
             deb = pkgs.callPackage ./nix/bundlers/deb.nix { package = plentysound; };
             deb-full = pkgs.callPackage ./nix/bundlers/deb.nix {
@@ -150,7 +157,7 @@
             };
             shellHook = ''
               export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath devBuildInputs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-              export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
+              export LIBCLANG_PATH="${pkgs.llvmPackages_16.libclang.lib}/lib"
             '';
 
             packages = devBuildInputs;

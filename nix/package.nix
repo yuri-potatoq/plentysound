@@ -7,7 +7,7 @@
   autoPatchelfHook,
   pipewire,
   dbus,
-  llvmPackages,
+  llvmPackages_16,
   glibc,
   libiconv ? null,
   darwin ? null,
@@ -43,7 +43,7 @@ let
       libvosk
     ];
 
-    LIBCLANG_PATH = "${llvmPackages.libclang.lib}/lib";
+    LIBCLANG_PATH = "${llvmPackages_16.libclang.lib}/lib";
     BINDGEN_EXTRA_CLANG_ARGS = "-isystem ${glibc.dev}/include";
 
     # Skip building documentation for release builds (faster)
