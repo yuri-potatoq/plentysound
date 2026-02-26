@@ -7,7 +7,7 @@
   autoPatchelfHook,
   pipewire,
   dbus,
-  llvmPackages,
+  llvmPackages_19,  # Use LLVM 19 instead of 21 for smaller builds
   glibc,
   libiconv ? null,
   darwin ? null,
@@ -19,7 +19,8 @@ let
   # Vendor filtering is now handled automatically by the crane overlay
   # See nix/crane-overlay.nix for the implementation
 
-  baseArgs = {
+  # Common settings shared by dependency and binary builds
+  commonArgs = {
     inherit src;
     pname = "plentysound";
     version = "0.1.0";
@@ -27,6 +28,7 @@ let
 
     nativeBuildInputs = [
       pkg-config
+      llvmPackages_19.libclang  # Build-time only, not in runtime closure
     ] ++ lib.optionals stdenv.isLinux [
       autoPatchelfHook
     ];
@@ -43,13 +45,9 @@ let
       libvosk
     ];
 
-    LIBCLANG_PATH = "${llvmPackages.libclang.lib}/lib";
+    LIBCLANG_PATH = "${llvmPackages_19.libclang.lib}/lib";
     BINDGEN_EXTRA_CLANG_ARGS = "-isystem ${glibc.dev}/include";
 
-    # Skip building documentation for release builds (faster)
-    CARGO_BUILD_RUSTDOC = "false";
-
-    # Use --offline to build without network access (prevents re-adding Windows deps)
     cargoExtraArgs = lib.concatStringsSep " " (
       [ "--offline" ] ++
       (if enableTranscriber then [ "--features" "transcriber" ] else [ "-p" "plentysound" ])
@@ -58,11 +56,39 @@ let
     LD_LIBRARY_PATH = lib.makeLibraryPath [ libvosk ];
   };
 
-  # Build dependencies
-  cargoArtifacts = craneLib.buildDepsOnly baseArgs;
+  # Aggressive size optimizations for dependencies
+  # These are built once and cached, so we prioritize size over compile speed
+  depsArgs = commonArgs // {
+    CARGO_PROFILE = "release";
+    CARGO_BUILD_RUSTDOC = "false";
+    CARGO_PROFILE_RELEASE_OPT_LEVEL = "z";
+    CARGO_PROFILE_RELEASE_LTO = "thin";
+    CARGO_PROFILE_RELEASE_STRIP = "symbols";
+    doCheck = false;  # Don't run tests during dependency build
+    cargoTestExtraArgs = "--all-targets";  # Skip doc tests if doCheck is enabled
+  };
+
+  # Settings for final binary
+  # Inherits release profile from deps but can have different opt-level
+  binaryArgs = commonArgs // {
+    CARGO_PROFILE = "release";
+    CARGO_BUILD_RUSTDOC = "false";
+    CARGO_PROFILE_RELEASE_OPT_LEVEL = "z";
+    CARGO_PROFILE_RELEASE_LTO = "thin";
+    CARGO_PROFILE_RELEASE_STRIP = "symbols";
+    dontStrip = false;
+    doCheck = false;
+    cargoTestExtraArgs = "--all-targets";
+  };
+
+  cargoArtifacts = craneLib.buildDepsOnly depsArgs;
 in
-craneLib.buildPackage (baseArgs // {
+craneLib.buildPackage (binaryArgs // {
   inherit cargoArtifacts;
 
-  passthru = { inherit baseArgs cargoArtifacts; };
+  passthru = {
+    inherit commonArgs depsArgs binaryArgs cargoArtifacts;
+    # Keep baseArgs for backwards compatibility with checks
+    baseArgs = commonArgs;
+  };
 })

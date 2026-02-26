@@ -37,5 +37,7 @@ jobs:
       - name: Build package bundles
         run: |
           nix build .#deb -L
+          nix build .#deb-full -L
           nix build .#rpm -L
-          # AUR packages are source-only, skip
+          nix build .#rpm-full -L
+          # AUR packages are source-only, skip binary builds

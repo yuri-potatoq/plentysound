@@ -153,5 +153,4 @@ in
     else
       cranePrev.downloadCargoPackage pkg;
 
-  # No other overrides needed - downloadCargoPackage handles everything
 }

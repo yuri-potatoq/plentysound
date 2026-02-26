@@ -13,10 +13,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    advisory-db = {
-      url = "github:rustsec/advisory-db";
-      flake = false;
-    };
+    # advisory-db = {
+    #   url = "github:rustsec/advisory-db";
+    #   flake = false;
+    # };
   };
 
   nixConfig = {
@@ -34,7 +34,7 @@
     ];
   };
 
-  outputs = inputs@{ flake-parts, nixpkgs, crane, fenix, advisory-db, ... }:
+  outputs = inputs@{ flake-parts, nixpkgs, crane, fenix, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
 
@@ -146,9 +146,9 @@
 
             fmt = craneLib.cargoFmt { inherit src; };
 
-            audit = craneLib.cargoAudit {
-              inherit src advisory-db;
-            };
+            # audit = craneLib.cargoAudit {
+            #   inherit src advisory-db;
+            # };
           };
 
           devShells.default = (crane.mkLib pkgs).overrideToolchain(devToolchain).devShell {
