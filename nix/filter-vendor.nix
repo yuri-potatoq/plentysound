@@ -1,4 +1,4 @@
-{ lib, stdenv, findutils }:
+{ lib, stdenv, findutils, gnused, python3 }:
 
 {
   # Filters a crane vendor directory to remove platform-specific crates
@@ -18,7 +18,7 @@
       inherit name;
       src = vendorDir;
 
-      nativeBuildInputs = [ findutils ];
+      nativeBuildInputs = [ findutils gnused python3 ];
 
       buildPhase =
         let
@@ -28,6 +28,9 @@
           cp -rL $src vendor
           chmod -R u+w vendor
           cd vendor
+
+          # DON'T patch Cargo.toml files - let Cargo.lock filtering handle it
+          # The Cargo.lock filtering should be sufficient to prevent building Windows crates
 
           # Find and filter Windows-specific crates recursively
           echo "Filtering vendor directory with patterns: ${toString filterPatterns}"
