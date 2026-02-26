@@ -46,7 +46,10 @@ let
     ];
 
     LIBCLANG_PATH = "${llvmPackages_19.libclang.lib}/lib";
-    BINDGEN_EXTRA_CLANG_ARGS = "-isystem ${glibc.dev}/include";
+    BINDGEN_EXTRA_CLANG_ARGS = builtins.concatStringsSep " " [
+      "-isystem ${glibc.dev}/include"
+      "-isystem ${llvmPackages_19.libclang.lib}/lib/clang/${llvmPackages_19.libclang.version}/include"
+    ];
 
     cargoExtraArgs = lib.concatStringsSep " " (
       [ "--offline" ] ++
