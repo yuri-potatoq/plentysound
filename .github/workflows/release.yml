@@ -42,10 +42,10 @@ jobs:
           nix build .#rpm -L -o result-rpm
           nix build .#rpm-full -L -o result-rpm-full
 
-      - name: Build AUR packages
-        run: |
-          nix build .#aur -L -o result-aur
-          nix build .#aur-full -L -o result-aur-full
+      # - name: Build AUR packages
+      #   run: |
+      #     nix build .#aur -L -o result-aur
+      #     nix build .#aur-full -L -o result-aur-full
 
       - name: Collect and organize artifacts
         run: |
@@ -59,10 +59,13 @@ jobs:
           cp result-rpm release-artifacts/plentysound-0.1.0-1.x86_64.rpm
           cp result-rpm-full release-artifacts/plentysound-full-0.1.0-1.x86_64.rpm
 
+          # TODO: make self installable AUR package
           # Compress AUR packages (directories) with parallel zstd
-          tar --use-compress-program="zstd -T0" -cf release-artifacts/plentysound-aur-0.1.0.tar.zst -C result-aur . &
-          tar --use-compress-program="zstd -T0" -cf release-artifacts/plentysound-full-aur-0.1.0.tar.zst -C result-aur-full . &
-          wait
+          # tar --use-compress-program="zstd -T0" -cf release-artifacts/plentysound-aur-0.1.0.tar.zst -C result-aur . &
+          # tar --use-compress-program="zstd -T0" -cf release-artifacts/plentysound-full-aur-0.1.0.tar.zst -C result-aur-full . &
+          # tar -czvf release-artifacts/plentysound-aur-0.1.0.tar.gz result-aur . &
+          # tar -czvf release-artifacts/plentysound-full-aur-0.1.0.tar.gz result-aur-full . &
+          # wait
       - name: Generate checksums
         run: |
           cd release-artifacts
