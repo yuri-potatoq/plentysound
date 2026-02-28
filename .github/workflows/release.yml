@@ -126,22 +126,28 @@ jobs:
             ```ini
             [plentysound]
             SigLevel = Optional TrustAll
-            Server = https://github.com/yuri-potatoq/plentysound/releases/latest/download
+            Server = https://github.com/yuri-potatoq/plentysound/releases/download/${{ steps.tag.outputs.tag }}
             ```
+
+            **Important:** You must use the specific version tag shown above. Using `/latest/download` will cause 404 errors due to GitHub redirect issues.
 
             Then install with pacman, yay, or paru:
             ```bash
+            # Update package database
+            sudo pacman -Sy
+
             # Standard version
-            sudo pacman -Sy plentysound
+            sudo pacman -S plentysound
 
             # Full version (with transcriber)
-            sudo pacman -Sy plentysound-full
+            sudo pacman -S plentysound-full
+            ```
 
-            # Or with yay
-            yay -Sy plentysound
-
-            # Or with paru
-            paru -Sy plentysound
+            Works with all pacman-compatible tools:
+            ```bash
+            yay -S plentysound
+            # or
+            paru -S plentysound
             ```
 
             Alternatively, install directly from package file:
