@@ -2,6 +2,25 @@
 
 A Linux soundboard that plays audio through PipeWire, letting you send sounds into Discord, browsers (Meet, Zoom), or any application that accepts an audio input. Inspired by [Soundux](https://github.com/Soundux/Soundux), rebuilt from scratch because upstream has been abandoned since 2021 ([ref](https://github.com/NixOS/nixpkgs/pull/283439)).
 
+## Demo
+
+![demo](demo.gif)
+
+**plentysound** is a daemon-based soundboard with a terminal UI that routes audio through PipeWire virtual sinks. It includes optional AI-powered keyword detection that can automatically play sounds when spoken words are detected. The app saves your songs, volume settings, audio effects, and word mappings between sessions.
+
+### Topics
+
+- [Features](#features)
+- [How to download](#how-to-download)
+- [Host dependencies](#host-dependencies)
+- [How to build](#how-to-build) — Cargo, Nix, package builds
+- [How to run](#how-to-run) — daemon + client architecture
+- [TUI navigation](#tui-navigation) — keyboard shortcuts and mouse controls
+- [Development Instructions](#development-instructions) — testing, logs, internals
+  - [How keyword detection works](#how-keyword-detection-works)
+  - [Vosk model mirror](#vosk-model-mirror)
+  - [Files created on host](#files-created-on-host)
+
 ## Features
 
 - **Play audio to any PipeWire output** — route sounds to virtual sinks so Discord, browsers, or any app picks them up as microphone input
@@ -10,32 +29,9 @@ A Linux soundboard that plays audio through PipeWire, letting you send sounds in
 - **Persistent config** — songs, volume, audio FX settings, and word mappings are saved across restarts
 - **AI keyword detection** *(optional, `transcriber` feature)* — uses a [Vosk](https://alphacephei.com/vosk/) speech model to listen on a PipeWire input source and automatically play a sound when a configured keyword is spoken. The model is downloaded automatically from GitHub on first use
 
-### How keyword detection works
+## How to download
 
-When you enable the word detector from the TUI, plentysound:
-
-1. Checks if the Vosk speech model is available locally
-2. If not, downloads it automatically from the [plentysound-vosk-models](https://github.com/yuri-potatoq/plentysound-vosk-models) GitHub releases (a compressed `tar.zst` archive, ~50MB)
-3. Extracts the model to `~/.local/share/plentysound/models/`
-4. Captures audio from the selected PipeWire input source and improve audio quality for word recognition.
-5. When a configured keyword is detected, the mapped sound is played
-
-On subsequent launches, if word mappings exist and the model is already downloaded, the detector auto-starts when PipeWire devices become available.
-
-### Vosk model mirror
-
-The Vosk speech models used by plentysound are hosted in a separate repository: [plentysound-vosk-models](https://github.com/yuri-potatoq/plentysound-vosk-models). This repo acts as a mirror for the pre-trained Vosk models that plentysound needs for keyword detection. The mirror exists because the upstream Vosk model downloads are hosted on external servers that may be slow, unavailable, or change URLs over time. By keeping a copy in a GitHub release asset, plentysound can reliably download the correct model version without depending on third-party hosting. The daemon fetches the latest release from this repo via the GitHub API at first launch when the `transcriber` feature is enabled and no local model is found.
-
-> NOTE: When keyword detection is enabled, since it use a local lightweight AI model, the program can have its memory usage increased to use around of ~100MB.
-
-## Files created on host
-
-| Path | Description |
-|------|-------------|
-| `~/.config/plentysound/config.yaml` | Configuration: song list, volume, audio FX, word mappings with source/output devices |
-| `~/.local/share/plentysound/plentysound.log` | Daemon log file |
-| `~/.local/share/plentysound/models/` | Downloaded Vosk speech model *(only with `transcriber` feature)* |
-| `$XDG_RUNTIME_DIR/plentysound.sock` | Unix socket for daemon-client IPC (removed on shutdown) |
+Download the latest release from the [GitHub releases page](https://github.com/yuri-potatoq/plentysound/releases), which includes pre-built packages (`.deb`, `.rpm`, AUR) and installation instructions for your distribution.
 
 ## Host dependencies
 
@@ -140,6 +136,32 @@ sudo rpm -i result/*.rpm
 cd result && makepkg -si
 ```
 
+### Build all bundler variants
+
+| Command | Output |
+|---------|--------|
+| `nix build .#deb` | `plentysound_0.1.0_amd64.deb` |
+| `nix build .#deb-full` | `plentysound-full_0.1.0_amd64.deb` |
+| `nix build .#rpm` | `plentysound-0.1.0-1.x86_64.rpm` |
+| `nix build .#rpm-full` | `plentysound-full-0.1.0-1.x86_64.rpm` |
+| `nix build .#aur` | Directory with PKGBUILD |
+| `nix build .#aur-full` | Directory with PKGBUILD |
+
+Verify package contents:
+
+```bash
+# Verify .deb contents
+dpkg-deb -c result       # list files
+dpkg-deb -I result       # show control info
+
+# Verify .rpm contents
+rpm -qlp result          # list files
+rpm -qip result          # show package info
+
+# Flake evaluation
+nix flake show           # all new packages listed
+```
+
 ## How to run
 
 plentysound uses a daemon + client architecture:
@@ -160,9 +182,6 @@ The **daemon** runs in the background, manages PipeWire connections, audio playb
 The **TUI client** connects to the daemon and provides the interactive terminal interface. Multiple clients can connect to the same daemon simultaneously.
 
 ## TUI navigation
-
-### Demo!
-![demo](demo.gif)
 
 ### Panel navigation
 
@@ -211,7 +230,9 @@ When adding a keyword binding, the overlay guides you through:
 | `Enter` | Confirm selection |
 | `Esc` | Cancel and close overlay |
 
-## Testing samples
+## Development Instructions
+
+### Testing samples
 
 Record audio samples for testing keyword detection:
 
@@ -225,29 +246,36 @@ pactl list sources short
 pw-record --rate 16000Hz --channels 1 --target <source_name_or_id> ./tests/samples/output.wav
 ```
 
-## Logs
+### Logs
 
 Daemon logs (useful for debugging detection and playback issues):
 ```bash
 cat ~/.local/share/plentysound/plentysound.log
 ```
 
+### How keyword detection works
 
-# Build all bundler variants                                                                                                                                                                                     │
-│ nix build .#deb          # produces plentysound_0.1.0_amd64.deb                                                                                                                                                  │
-│ nix build .#deb-full     # produces plentysound-full_0.1.0_amd64.deb                                                                                                                                             │
-│ nix build .#rpm          # produces plentysound-0.1.0-1.x86_64.rpm                                                                                                                                               │
-│ nix build .#rpm-full     # produces plentysound-full-0.1.0-1.x86_64.rpm                                                                                                                                          │
-│ nix build .#aur          # produces directory with PKGBUILD                                                                                                                                                      │
-│ nix build .#aur-full     # produces directory with PKGBUILD                                                                                                                                           
-│ # Verify .deb contents                                                                                                                                                                                           │
-│ dpkg-deb -c result       # list files                                                                                                                                                                            │
-│ dpkg-deb -I result       # show control info                                                                                                                                                                     │
-│                                                                                                                                                                                                                  │
-│ # Verify .rpm contents                                                                                                                                                                                           │
-│ rpm -qlp result           # list files                                                                                                                                                                           │
-│ rpm -qip result           # show package info                                                                                                                                                                    │
-│                                                                                                                                                                                                                  │
-│ # Flake evaluation                                                                                                                                                                                               │
-│ nix flake show            # all new packages listed   
+When you enable the word detector from the TUI, plentysound:
 
+1. Checks if the Vosk speech model is available locally
+2. If not, downloads it automatically from the [plentysound-vosk-models](https://github.com/yuri-potatoq/plentysound-vosk-models) GitHub releases (a compressed `tar.zst` archive, ~50MB)
+3. Extracts the model to `~/.local/share/plentysound/models/`
+4. Captures audio from the selected PipeWire input source and improve audio quality for word recognition.
+5. When a configured keyword is detected, the mapped sound is played
+
+On subsequent launches, if word mappings exist and the model is already downloaded, the detector auto-starts when PipeWire devices become available.
+
+### Vosk model mirror
+
+The Vosk speech models used by plentysound are hosted in a separate repository: [plentysound-vosk-models](https://github.com/yuri-potatoq/plentysound-vosk-models). This repo acts as a mirror for the pre-trained Vosk models that plentysound needs for keyword detection. The mirror exists because the upstream Vosk model downloads are hosted on external servers that may be slow, unavailable, or change URLs over time. By keeping a copy in a GitHub release asset, plentysound can reliably download the correct model version without depending on third-party hosting. The daemon fetches the latest release from this repo via the GitHub API at first launch when the `transcriber` feature is enabled and no local model is found.
+
+> NOTE: When keyword detection is enabled, since it use a local lightweight AI model, the program can have its memory usage increased to use around of ~100MB.
+
+### Files created on host
+
+| Path | Description |
+|------|-------------|
+| `~/.config/plentysound/config.yaml` | Configuration: song list, volume, audio FX, word mappings with source/output devices |
+| `~/.local/share/plentysound/plentysound.log` | Daemon log file |
+| `~/.local/share/plentysound/models/` | Downloaded Vosk speech model *(only with `transcriber` feature)* |
+| `$XDG_RUNTIME_DIR/plentysound.sock` | Unix socket for daemon-client IPC (removed on shutdown) |
