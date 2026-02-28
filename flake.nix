@@ -165,6 +165,27 @@
             RUST_BACKTRACE = "1";
             RUST_LOG = "debug";
           };
+
+          devShells.vm = pkgs.mkShell {
+            name = "vm-dev-shell";
+
+            buildInputs = with pkgs; [
+              qemu          # qemu-system-x86_64, qemu-img
+              curl          # for downloading images
+              openssh       # ssh, scp
+              cdrkit        # genisoimage for cloud-init ISO
+            ];
+
+            shellHook = ''
+              echo "🚀 VM development environment loaded"
+              echo "Available: qemu-system-x86_64, qemu-img, ssh, scp, genisoimage"
+              echo ""
+              echo "Usage:"
+              echo "  ./vm.sh debian start    # Start Debian VM"
+              echo "  ./vm.sh fedora start    # Start Fedora VM"
+              echo "  ./vm.sh <distro> help   # Show all commands"
+            '';
+          };
         };
     };
 }
