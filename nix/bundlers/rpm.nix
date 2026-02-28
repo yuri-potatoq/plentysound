@@ -1,4 +1,4 @@
-{ stdenv, writeText, rpm, lib, package, libvosk ? null, enableTranscriber ? false }:
+{ stdenv, writeText, rpm, lib, package, libvosk ? null, enableTranscriber ? false, patchelf }:
 
 let
   pname = if enableTranscriber then "plentysound-full" else "plentysound";
@@ -25,9 +25,16 @@ let
     %install
     mkdir -p %{buildroot}/usr/bin
     cp ${package}/bin/plentysound %{buildroot}/usr/bin/plentysound
+    chmod +w %{buildroot}/usr/bin/plentysound
+    ${patchelf}/bin/patchelf --set-interpreter /lib64/ld-linux-x86-64.so.2 \
+                             --set-rpath /lib64:/usr/lib64 \
+                             %{buildroot}/usr/bin/plentysound
     ${lib.optionalString enableTranscriber ''
     mkdir -p %{buildroot}/usr/lib64
     cp ${libvosk}/lib/libvosk.so %{buildroot}/usr/lib64/libvosk.so
+    chmod +w %{buildroot}/usr/lib64/libvosk.so
+    ${patchelf}/bin/patchelf --set-rpath /lib64:/usr/lib64 \
+                             %{buildroot}/usr/lib64/libvosk.so
     ''}
 
     %files
@@ -39,7 +46,7 @@ stdenv.mkDerivation {
   pname = "${pname}-rpm";
   inherit version;
 
-  nativeBuildInputs = [ rpm ];
+  nativeBuildInputs = [ rpm patchelf ];
 
   dontUnpack = true;
 

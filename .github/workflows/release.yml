@@ -42,30 +42,40 @@ jobs:
           nix build .#rpm -L -o result-rpm
           nix build .#rpm-full -L -o result-rpm-full
 
-      # - name: Build AUR packages
-      #   run: |
-      #     nix build .#aur -L -o result-aur
-      #     nix build .#aur-full -L -o result-aur-full
+      - name: Build Arch packages
+        run: |
+          nix build .#aur -L -o result-aur
+          nix build .#aur-full -L -o result-aur-full
+
+      - name: Create Arch repository database
+        run: |
+          mkdir -p arch-repo
+          cp result-aur/*.pkg.tar.zst arch-repo/
+          cp result-aur-full/*.pkg.tar.zst arch-repo/
+
+          # Use Docker to run repo-add (requires Arch Linux tools)
+          docker run --rm -v "$(pwd)/arch-repo:/repo" archlinux:latest bash -c "
+            pacman -Sy --noconfirm pacman-contrib && \
+            cd /repo && \
+            repo-add plentysound.db.tar.gz *.pkg.tar.zst
+          "
 
       - name: Collect and organize artifacts
         run: |
           mkdir -p release-artifacts
 
-          # Copy DEB files (single .deb files)
+          # Copy DEB files
           cp result-deb release-artifacts/plentysound_0.1.0_amd64.deb
           cp result-deb-full release-artifacts/plentysound-full_0.1.0_amd64.deb
 
-          # Copy RPM files (single .rpm files)
+          # Copy RPM files
           cp result-rpm release-artifacts/plentysound-0.1.0-1.x86_64.rpm
           cp result-rpm-full release-artifacts/plentysound-full-0.1.0-1.x86_64.rpm
 
-          # TODO: make self installable AUR package
-          # Compress AUR packages (directories) with parallel zstd
-          # tar --use-compress-program="zstd -T0" -cf release-artifacts/plentysound-aur-0.1.0.tar.zst -C result-aur . &
-          # tar --use-compress-program="zstd -T0" -cf release-artifacts/plentysound-full-aur-0.1.0.tar.zst -C result-aur-full . &
-          # tar -czvf release-artifacts/plentysound-aur-0.1.0.tar.gz result-aur . &
-          # tar -czvf release-artifacts/plentysound-full-aur-0.1.0.tar.gz result-aur-full . &
-          # wait
+          # Copy Arch packages and repository database
+          cp arch-repo/*.pkg.tar.zst release-artifacts/
+          cp arch-repo/plentysound.db* release-artifacts/
+          cp arch-repo/plentysound.files* release-artifacts/
       - name: Generate checksums
         run: |
           cd release-artifacts
@@ -110,17 +120,33 @@ jobs:
             sudo rpm -i plentysound-full-0.1.0-1.x86_64.rpm
             ```
 
-            ### Arch Linux (AUR)
-            ```bash
-            # Extract and build standard version
-            tar --use-compress-program=zstd -xf plentysound-aur-0.1.0.tar.zst
-            cd plentysound-aur-0.1.0
-            makepkg -si
+            ### Arch Linux (pacman/yay/paru)
 
-            # Or extract and build full version
-            tar --use-compress-program=zstd -xf plentysound-full-aur-0.1.0.tar.zst
-            cd plentysound-full-aur-0.1.0
-            makepkg -si
+            Add the custom repository to `/etc/pacman.conf`:
+            ```ini
+            [plentysound]
+            SigLevel = Optional TrustAll
+            Server = https://github.com/yuri-potatoq/plentysound/releases/latest/download
+            ```
+
+            Then install with pacman, yay, or paru:
+            ```bash
+            # Standard version
+            sudo pacman -Sy plentysound
+
+            # Full version (with transcriber)
+            sudo pacman -Sy plentysound-full
+
+            # Or with yay
+            yay -Sy plentysound
+
+            # Or with paru
+            paru -Sy plentysound
+            ```
+
+            Alternatively, install directly from package file:
+            ```bash
+            sudo pacman -U plentysound-0.1.0-1-x86_64.pkg.tar.zst
             ```
 
             ## Verify Checksums

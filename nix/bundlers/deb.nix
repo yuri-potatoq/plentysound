@@ -37,14 +37,14 @@ stdenv.mkDerivation {
     cp ${package}/bin/plentysound pkg/usr/bin/plentysound
     chmod +w pkg/usr/bin/plentysound
     patchelf --set-interpreter /lib64/ld-linux-x86-64.so.2 \
-             --set-rpath /usr/lib:/lib:/lib64 \
+             --set-rpath /lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/lib:/lib:/lib64 \
              pkg/usr/bin/plentysound
 
     ${lib.optionalString enableTranscriber ''
       mkdir -p pkg/usr/lib
       cp ${libvosk}/lib/libvosk.so pkg/usr/lib/libvosk.so
       chmod +w pkg/usr/lib/libvosk.so
-      patchelf --set-rpath /usr/lib:/lib:/lib64 pkg/usr/lib/libvosk.so
+      patchelf --set-rpath /lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/lib:/lib:/lib64 pkg/usr/lib/libvosk.so
     ''}
   '';
 
